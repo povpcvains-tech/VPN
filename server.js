@@ -21,10 +21,10 @@ app.get('/', (req, res) => {
                 <code style="color: #0f0;">/p/${id}</code><br>
                 👥 ${data.count} человек перешло
                 <form action="/delete/${id}" method="POST" style="display: inline;">
-                    <button type="submit" style="background: #d32f2f; color: white;">🗑 Удалить</button>
+                    <button type="submit" style="background: #d32f2f; color: white; border: none; padding: 5px 10px; border-radius: 4px;">🗑 Удалить</button>
                 </form>
                 <form action="/decrement/${id}" method="POST" style="display: inline;">
-                    <button type="submit" style="background: #ff9800; color: white;">➖ −1</button>
+                    <button type="submit" style="background: #ff9800; color: white; border: none; padding: 5px 10px; border-radius: 4px;">➖ −1</button>
                 </form>
             </div>
         `;
@@ -62,7 +62,7 @@ app.get('/', (req, res) => {
     `);
 });
 
-// Обработчик генерации (ваш старый код его пропускал)
+// Обработчик генерации
 app.post('/generate', (req, res) => {
     const content = req.body.content;
     const randomId = generateRandomId();
@@ -101,17 +101,22 @@ app.get('/p/:id', (req, res) => {
     }
 });
 
-// Удаление пользователя (-1)
+// Удаление одного пользователя (-1)
 app.post('/decrement/:id', (req, res) => {
     const id = req.params.id;
-    if (subscriptions[id] && subscriptions[id].count > 0) subscriptions[id].count--;
+    if (subscriptions[id] && subscriptions[id].count > 0) {
+        subscriptions[id].count--;
+    }
     res.redirect('/');
 });
 
-// Удаление всей ссылки
+// Полное удаление ссылки
 app.post('/delete/:id', (req, res) => {
     delete subscriptions[req.params.id];
     res.redirect('/');
 });
 
-app.listen(PORT, () => console.log(\`Server running on port \${PORT}\`));
+// ЗАПУСК СЕРВЕРА (исправленная строка)
+app.listen(PORT, () => {
+    console.log("Server running on port " + PORT);
+});
