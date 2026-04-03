@@ -49,7 +49,7 @@ app.get('/', (req, res) => {
             <div class="card">
                 <h1>🔐 VPN Подписка — Создать ссылку</h1>
                 <form action="/generate" method="POST">
-                    <input type="text" name="content" placeholder="Введите содержимое ссылки (например: fydfye)" required>
+                    <input type="text" name="content" placeholder="Введите содержимое ссылки (например: конфиг для VPN)" required>
                     <button type="submit">✨ Сгенерировать ссылку</button>
                 </form>
             </div>
@@ -70,34 +70,16 @@ app.post('/generate', (req, res) => {
     res.redirect('/');
 });
 
-// Переход по ссылке /p/что-то
+// Переход по ссылке /p/что-то — ВОЗВРАЩАЕТ ТОЛЬКО ТЕКСТ (RAW)
 app.get('/p/:id', (req, res) => {
     const id = req.params.id;
     if (subscriptions[id]) {
         subscriptions[id].count++;
-        res.send(`
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <title>VPN Доступ</title>
-                <style>
-                    body { font-family: Arial; text-align: center; padding: 3rem; background: #0d1117; color: #fff; }
-                    .card { background: #161b22; padding: 2rem; border-radius: 16px; display: inline-block; }
-                    .content { background: #238636; padding: 1rem; border-radius: 8px; font-size: 24px; }
-                </style>
-            </head>
-            <body>
-                <div class="card">
-                    <h1>🔐 VPN Доступ</h1>
-                    <div class="content">${subscriptions[id].content}</div>
-                    <p>👥 Всего переходов: ${subscriptions[id].count}</p>
-                </div>
-            </body>
-            </html>
-        `);
+        // Отправляем только содержимое как обычный текст (без HTML)
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.send(subscriptions[id].content);
     } else {
-        res.status(404).send('Ссылка не найдена');
+        res.status(404).send('Link not found');
     }
 });
 
@@ -116,7 +98,7 @@ app.post('/delete/:id', (req, res) => {
     res.redirect('/');
 });
 
-// ЗАПУСК СЕРВЕРА (исправленная строка)
+// Запуск сервера
 app.listen(PORT, () => {
     console.log("Server running on port " + PORT);
 });
