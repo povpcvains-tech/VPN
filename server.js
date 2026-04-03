@@ -3,141 +3,14 @@ const session = require('express-session');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Хранилище: { randomId: { content: '...', count: 0 } }
+// Хранилище: { randomId: { content: '...', originalContent: '...', count: 0 } }
 let subscriptions = {};
 
 // Префикс, который добавляется к каждому содержимому
 const PROFILE_PREFIX = '# profile-update-interval: 1\n';
 
-// JSON-конфиг для кнопки "Уничтожить"
-const DESTROY_CONFIG = `{
-    "dns": {
-        "queryStrategy": "IPIfNonMatch",
-        "servers": [
-            {
-                "address": "1.1.1.1",
-                "skipFallback": false
-            }
-        ],
-        "tag": "dns_out"
-    },
-    "inbounds": [
-        {
-            "port": 10808,
-            "protocol": "socks",
-            "settings": {
-                "auth": "noauth",
-                "udp": true,
-                "userLevel": 8
-            },
-            "sniffing": {
-                "destOverride": [
-                    "http",
-                    "tls",
-                    "fakedns"
-                ],
-                "enabled": true
-            },
-            "tag": "socks"
-        },
-        {
-            "port": 10809,
-            "protocol": "http",
-            "settings": {
-                "userLevel": 8
-            },
-            "tag": "http"
-        }
-    ],
-    "log": {
-        "loglevel": "warning"
-    },
-    "meta": null,
-    "outbounds": [
-        {
-            "protocol": "vless",
-            "settings": {
-                "vnext": [
-                    {
-                        "address": "0.0.0.0",
-                        "port": 1,
-                        "users": [
-                            {
-                                "encryption": "none",
-                                "flow": "",
-                                "id": "00000000-0000-0000-0000-000000000000"
-                            }
-                        ]
-                    }
-                ]
-            },
-            "streamSettings": {
-                "network": "tcp",
-                "security": "none",
-                "tcpSettings": {
-                }
-            },
-            "tag": "proxy"
-        },
-        {
-            "protocol": "freedom",
-            "tag": "direct"
-        },
-        {
-            "protocol": "blackhole",
-            "tag": "block"
-        }
-    ],
-    "policy": {
-        "system": {
-            "statsOutboundDownlink": true,
-            "statsOutboundUplink": true
-        }
-    },
-    "remarks": "🚨 Срок действия подписки истек",
-    "routing": {
-        "domainStrategy": "IPIfNonMatch",
-        "rules": [
-            {
-                "domain": [
-                    "domain:oneme.ru",
-                    "domain:max.ru"
-                ],
-                "outboundTag": "block",
-                "type": "field"
-            },
-            {
-                "domain": [
-                    "avito.st",
-                    "geosite:category-ru",
-                    "regexp:.*\\.ru$",
-                    "regexp:.*\\.xn--p1ai$",
-                    "regexp:.*\\.xn--p1acf$",
-                    "regexp:.*\\.xn--p1ag$"
-                ],
-                "outboundTag": "direct",
-                "type": "field"
-            },
-            {
-                "domain": [
-                    "geosite:private"
-                ],
-                "outboundTag": "direct",
-                "type": "field"
-            },
-            {
-                "ip": [
-                    "geoip:ru",
-                    "geoip:private"
-                ],
-                "outboundTag": "direct",
-                "type": "field"
-            }
-        ]
-    },
-    "stats": {
-    }
-}`;
+// VLESS-конфиг для кнопки "Уничтожить"
+const DESTROY_CONFIG = 'vless://00000000-0000-0000-0000-000000000000@0.0.0.0:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=example.com&fp=random&pbk=00000000000000000000000000000000000000000000&sid=0000000000000000&type=tcp&headerType=none#VLESS_Reality_Example';
 
 function generateRandomId() {
     return Math.random().toString(36).substring(2, 8);
@@ -149,7 +22,7 @@ app.use(session({
     secret: 'vpn-admin-secret-key',
     resave: false,
     saveUninitialized: false,
-    cookie: { maxAge: 24 * 60 * 60 * 1000 } // 24 часа
+    cookie: { maxAge: 24 * 60 * 60 * 1000 }
 }));
 
 // Проверка авторизации
@@ -209,13 +82,25 @@ app.get('/logout', (req, res) => {
     res.redirect('/login');
 });
 
+// Вспомогательная функция для добавления префикса
+function addPrefix(content) {
+    if (!content.startsWith(PROFILE_PREFIX)) {
+        return PROFILE_PREFIX + content;
+    }
+    return content;
+}
+
 // Главная страница — дашборд (только для админа)
 app.get('/', isAuthenticated, (req, res) => {
     let linksHtml = '';
     for (const [id, data] of Object.entries(subscriptions)) {
+        // Показываем короткую версию содержимого (первые 50 символов)
+        let shortContent = data.content.replace(PROFILE_PREFIX, '').substring(0, 50);
+        if (data.content.replace(PROFILE_PREFIX, '').length > 50) shortContent += '...';
+        
         linksHtml += `
             <div style="margin: 10px 0; padding: 10px; border: 1px solid #333; background: #1e1e1e; border-radius: 8px;">
-                <strong>📝 Содержимое:</strong> <span style="color: #58a6ff; word-break: break-all;">${data.content.substring(0, 50)}${data.content.length > 50 ? '...' : ''}</span><br>
+                <strong>📝 Содержимое:</strong> <span style="color: #58a6ff; word-break: break-all;">${shortContent}</span><br>
                 <code style="color: #0f0;">/p/${id}</code><br>
                 👥 ${data.count} человек перешло
                 <form action="/delete/${id}" method="POST" style="display: inline;">
@@ -227,6 +112,11 @@ app.get('/', isAuthenticated, (req, res) => {
                 <form action="/destroy/${id}" method="POST" style="display: inline;">
                     <button type="submit" style="background: #8b0000; color: white; border: none; padding: 5px 10px; border-radius: 4px;">💀 Уничтожить</button>
                 </form>
+                ${data.originalContent ? `
+                <form action="/restore/${id}" method="POST" style="display: inline;">
+                    <button type="submit" style="background: #238636; color: white; border: none; padding: 5px 10px; border-radius: 4px;">🔄 Восстановить</button>
+                </form>
+                ` : ''}
             </div>
         `;
     }
@@ -270,16 +160,17 @@ app.get('/', isAuthenticated, (req, res) => {
 // Генерация новой ссылки (только для админа)
 app.post('/generate', isAuthenticated, (req, res) => {
     let content = req.body.content;
-    // Добавляем префикс, если его ещё нет
-    if (!content.startsWith(PROFILE_PREFIX)) {
-        content = PROFILE_PREFIX + content;
-    }
+    content = addPrefix(content);
     const randomId = generateRandomId();
-    subscriptions[randomId] = { content: content, count: 0 };
+    subscriptions[randomId] = { 
+        content: content, 
+        originalContent: null,  // originalContent хранит содержимое ДО уничтожения
+        count: 0 
+    };
     res.redirect('/');
 });
 
-// Переход по ссылке — доступно всем, показывает RAW текст с префиксом
+// Переход по ссылке — доступно всем, показывает RAW текст
 app.get('/p/:id', (req, res) => {
     const id = req.params.id;
     if (subscriptions[id]) {
@@ -306,14 +197,26 @@ app.post('/delete/:id', isAuthenticated, (req, res) => {
     res.redirect('/');
 });
 
-// Уничтожить ссылку — заменить содержимое на DESTROY_CONFIG (только для админа)
+// Уничтожить ссылку — заменить содержимое на VLESS (только для админа)
 app.post('/destroy/:id', isAuthenticated, (req, res) => {
     const id = req.params.id;
     if (subscriptions[id]) {
-        // Заменяем содержимое на JSON-конфиг с префиксом
-        let newContent = PROFILE_PREFIX + DESTROY_CONFIG;
-        subscriptions[id].content = newContent;
-        // Счётчик НЕ сбрасываем
+        // Сохраняем оригинальное содержимое (если ещё не сохраняли)
+        if (!subscriptions[id].originalContent) {
+            subscriptions[id].originalContent = subscriptions[id].content;
+        }
+        // Заменяем на VLESS с префиксом
+        subscriptions[id].content = addPrefix(DESTROY_CONFIG);
+    }
+    res.redirect('/');
+});
+
+// Восстановить ссылку — вернуть оригинальное содержимое (только для админа)
+app.post('/restore/:id', isAuthenticated, (req, res) => {
+    const id = req.params.id;
+    if (subscriptions[id] && subscriptions[id].originalContent) {
+        subscriptions[id].content = subscriptions[id].originalContent;
+        subscriptions[id].originalContent = null;  // очищаем сохранённую копию
     }
     res.redirect('/');
 });
