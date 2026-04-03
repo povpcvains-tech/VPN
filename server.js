@@ -2,18 +2,16 @@ const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Хранилище: рандомный ID -> { content: "fydfye", count: 0 }
+// Хранилище: { randomId: { content: '...', count: 0 } }
 let subscriptions = {};
 
-// Генерация рандомных букв (6 символов)
 function generateRandomId() {
     return Math.random().toString(36).substring(2, 8);
 }
 
 app.use(express.urlencoded({ extended: true }));
-app.set('view engine', 'ejs');
 
-// Главная страница — создатель вводит содержимое
+// Главная страница — форма создания
 app.get('/', (req, res) => {
     let linksHtml = '';
     for (const [id, data] of Object.entries(subscriptions)) {
@@ -23,10 +21,10 @@ app.get('/', (req, res) => {
                 <code style="color: #0f0;">/p/${id}</code><br>
                 👥 ${data.count} человек перешло
                 <form action="/delete/${id}" method="POST" style="display: inline;">
-                    <button type="submit" style="background: #d32f2f; color: white; border: none; padding: 5px 10px; border-radius: 4px;">🗑 Удалить</button>
+                    <button type="submit" style="background: #d32f2f; color: white;">🗑 Удалить</button>
                 </form>
                 <form action="/decrement/${id}" method="POST" style="display: inline;">
-                    <button type="submit" style="background: #ff9800; color: white; border: none; padding: 5px 10px; border-radius: 4px;">➖ −1</button>
+                    <button type="submit" style="background: #ff9800; color: white;">➖ −1</button>
                 </form>
             </div>
         `;
@@ -44,8 +42,6 @@ app.get('/', (req, res) => {
                 input, button { padding: 10px; margin: 5px; border-radius: 6px; border: none; }
                 input { width: 250px; background: #0d1117; color: #fff; border: 1px solid #333; }
                 button { background: #238636; color: white; cursor: pointer; }
-                .delete-btn { background: #d32f2f; }
-                .decrement-btn { background: #ff9800; }
                 code { background: #0d1117; padding: 4px 8px; border-radius: 4px; }
             </style>
         </head>
@@ -57,7 +53,6 @@ app.get('/', (req, res) => {
                     <button type="submit">✨ Сгенерировать ссылку</button>
                 </form>
             </div>
-
             <div class="card">
                 <h2>📋 Мои ссылки</h2>
                 ${linksHtml || '<p>Пока нет ни одной ссылки. Создайте первую!</p>'}
@@ -67,45 +62,36 @@ app.get('/', (req, res) => {
     `);
 });
 
-// Генерация ссылки с рандомным ID
+// Обработчик генерации (ваш старый код его пропускал)
 app.post('/generate', (req, res) => {
     const content = req.body.content;
     const randomId = generateRandomId();
-    subscriptions[randomId] = {
-        content: content,
-        count: 0
-    };
+    subscriptions[randomId] = { content: content, count: 0 };
     res.redirect('/');
 });
 
-// Переход по ссылке — показываем содержимое и увеличиваем счётчик
+// Переход по ссылке /p/что-то
 app.get('/p/:id', (req, res) => {
     const id = req.params.id;
-    
-    if (subscriptions.hasOwnProperty(id)) {
-        subscriptions[id].count++; // +1 человек перешёл
-        
+    if (subscriptions[id]) {
+        subscriptions[id].count++;
         res.send(`
             <!DOCTYPE html>
             <html>
             <head>
                 <meta charset="UTF-8">
-                <title>VPN Подключение</title>
+                <title>VPN Доступ</title>
                 <style>
                     body { font-family: Arial; text-align: center; padding: 3rem; background: #0d1117; color: #fff; }
-                    .card { background: #161b22; padding: 2rem; border-radius: 16px; display: inline-block; max-width: 500px; }
-                    .content { background: #238636; padding: 1rem; border-radius: 8px; font-size: 24px; word-break: break-all; }
-                    .count { font-size: 32px; color: #58a6ff; margin-top: 1rem; }
+                    .card { background: #161b22; padding: 2rem; border-radius: 16px; display: inline-block; }
+                    .content { background: #238636; padding: 1rem; border-radius: 8px; font-size: 24px; }
                 </style>
             </head>
             <body>
                 <div class="card">
                     <h1>🔐 VPN Доступ</h1>
-                    <div class="content">
-                        ${subscriptions[id].content}
-                    </div>
-                    <p class="count">👥 Всего переходов: ${subscriptions[id].count}</p>
-                    <p><small>Ссылка: /p/${id}</small></p>
+                    <div class="content">${subscriptions[id].content}</div>
+                    <p>👥 Всего переходов: ${subscriptions[id].count}</p>
                 </div>
             </body>
             </html>
@@ -115,22 +101,17 @@ app.get('/p/:id', (req, res) => {
     }
 });
 
-// Удалить одного пользователя (минус 1)
+// Удаление пользователя (-1)
 app.post('/decrement/:id', (req, res) => {
     const id = req.params.id;
-    if (subscriptions.hasOwnProperty(id) && subscriptions[id].count > 0) {
-        subscriptions[id].count--;
-    }
+    if (subscriptions[id] && subscriptions[id].count > 0) subscriptions[id].count--;
     res.redirect('/');
 });
 
-// Полностью удалить ссылку
+// Удаление всей ссылки
 app.post('/delete/:id', (req, res) => {
-    const id = req.params.id;
-    delete subscriptions[id];
+    delete subscriptions[req.params.id];
     res.redirect('/');
 });
 
-app.listen(PORT, () => {
-    console.log(`Сервер запущен: http://localhost:${PORT}`);
-});
+app.listen(PORT, () => console.log(\`Server running on port \${PORT}\`));
