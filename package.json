@@ -1,11 +1,6 @@
 {
   "name": "vpn-counter",
   "version": "1.0.0",
-  "description": "VPN subscription counter with admin panel",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
   "dependencies": {
     "express": "^4.18.2",
     "express-session": "^1.18.0"
