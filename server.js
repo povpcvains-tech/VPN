@@ -6,9 +6,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ==================== КОНФИГУРАЦИЯ ====================
-// ЗАМЕНИТЕ НА СВОИ ДАННЫЕ (ОПЦИОНАЛЬНО):
-const GIST_ID = 'fe2b9abda4ee7cf16314d8422c97f933';           // ID вашего Gist (если не нужен - оставьте 'ВАШ_GIST_ID')
-const GITHUB_TOKEN = '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';        // Токен GitHub (если не нужен - оставьте 'ВАШ_TOKEN')
+const GIST_ID = 'fe2b9abda4ee7cf16314d8422c97f933';
+const GITHUB_TOKEN = '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';
 
 // ==================== ПЕРЕМЕННЫЕ ====================
 let subscriptions = {};
@@ -16,7 +15,6 @@ const BACKUP_FILE = './backup.json';
 const PROFILE_PREFIX = '# profile-update-interval: 1\n';
 const DESTROY_CONFIG = 'vless://00000000-0000-0000-0000-000000000000@0.0.0.0:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=example.com&fp=random&pbk=00000000000000000000000000000000000000000000&sid=0000000000000000&type=tcp&headerType=none#VLESS_Reality_Example';
 
-// Настройка multer для приёма файлов
 const upload = multer({ storage: multer.memoryStorage() });
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
@@ -38,41 +36,87 @@ function removePrefix(content) {
     return content;
 }
 
-// ==================== РАБОТА С GIST ====================
+// ==================== РАБОТА С GIST (DataBAse.txt) ====================
 async function saveToGist() {
-    if (!GIST_ID || GIST_ID === 'ВАШ_GIST_ID') return;
+    console.log('💾 Сохраняю в Gist...');
+    
+    if (!GIST_ID || GIST_ID === 'ВАШ_GIST_ID') {
+        console.log('❌ Gist ID не настроен');
+        return;
+    }
     
     try {
-        await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+        const response = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
             method: 'PATCH',
             headers: {
                 'Authorization': `token ${GITHUB_TOKEN}`,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                files: { 'subscriptions.json': { content: JSON.stringify(subscriptions, null, 2) } }
+                files: {
+                    'DataBAse.txt': {
+                        content: JSON.stringify(subscriptions, null, 2)
+                    }
+                }
             })
         });
-        console.log('✅ Сохранено в Gist');
-    } catch (e) { console.error('❌ Gist save error:', e.message); }
+        
+        if (response.ok) {
+            console.log('✅ Данные сохранены в Gist (DataBAse.txt)');
+        } else {
+            const errorText = await response.text();
+            console.log('❌ Ошибка API:', response.status, errorText);
+        }
+    } catch (error) {
+        console.error('❌ Ошибка сохранения в Gist:', error.message);
+        fs.writeFileSync(BACKUP_FILE, JSON.stringify(subscriptions, null, 2));
+        console.log('📁 Сохранено в локальный бэкап');
+    }
 }
 
 async function loadFromGist() {
-    if (!GIST_ID || GIST_ID === 'ВАШ_GIST_ID') return false;
+    console.log('📥 Загружаю из Gist...');
+    
+    if (!GIST_ID || GIST_ID === 'ВАШ_GIST_ID') {
+        console.log('❌ Gist ID не настроен');
+        return false;
+    }
     
     try {
-        const res = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
-            headers: { 'Authorization': `token ${GITHUB_TOKEN}` }
+        const response = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+            headers: {
+                'Authorization': `token ${GITHUB_TOKEN}`
+            }
         });
-        const gist = await res.json();
-        const content = gist.files?.['subscriptions.json']?.content;
-        if (content) {
-            subscriptions = JSON.parse(content);
-            console.log(`✅ Загружено ${Object.keys(subscriptions).length} ссылок из Gist`);
+        
+        if (response.ok) {
+            const gist = await response.json();
+            const content = gist.files?.['DataBAse.txt']?.content;
+            
+            if (content) {
+                subscriptions = JSON.parse(content);
+                const count = Object.keys(subscriptions).length;
+                console.log(`✅ Загружено ${count} ссылок из Gist (DataBAse.txt)`);
+                return true;
+            } else {
+                console.log('⚠️ Файл DataBAse.txt пуст');
+                return false;
+            }
+        } else {
+            console.log('❌ Ошибка загрузки:', response.status);
+            return false;
+        }
+    } catch (error) {
+        console.error('❌ Ошибка загрузки из Gist:', error.message);
+        
+        if (fs.existsSync(BACKUP_FILE)) {
+            const backupData = fs.readFileSync(BACKUP_FILE, 'utf8');
+            subscriptions = JSON.parse(backupData);
+            console.log(`📁 Загружено из локального бэкапа`);
             return true;
         }
-    } catch (e) { console.error('❌ Gist load error:', e.message); }
-    return false;
+        return false;
+    }
 }
 
 // ==================== MIDDLEWARE ====================
@@ -90,7 +134,7 @@ function isAuthenticated(req, res, next) {
     else res.redirect('/login');
 }
 
-// ==================== СТРАНИЦА ВХОДА С ВЫБОРОМ ЗАГРУЗКИ ====================
+// ==================== СТРАНИЦА ВХОДА ====================
 app.get('/login', (req, res) => {
     const error = req.query.error === 'no_file' ? '❌ Файл не выбран' : 
                   req.query.error === 'invalid' ? '❌ Неверный формат файла' : '';
@@ -110,7 +154,6 @@ app.get('/login', (req, res) => {
                 button { background: #667eea; color: white; border: none; cursor: pointer; font-weight: bold; }
                 button:hover { background: #5a67d8; }
                 .divider { text-align: center; margin: 20px 0; color: #999; }
-                .file-input { background: #f7f7f7; }
                 .warning { background: #fff3cd; border: 1px solid #ffc107; padding: 12px; border-radius: 8px; margin: 15px 0; font-size: 13px; color: #856404; }
                 .error { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
             </style>
@@ -118,13 +161,8 @@ app.get('/login', (req, res) => {
         <body>
             <div class="container">
                 <h1>🔐 VPN Админка</h1>
-                
                 ${error ? `<div class="warning error">${error}</div>` : ''}
-                
-                <div class="warning">
-                    💡 <strong>Восстановление данных:</strong><br>
-                    Если сервер сбросился, загрузите ранее сохранённый .txt файл
-                </div>
+                <div class="warning">💡 <strong>Восстановление:</strong> загрузите ранее сохранённый .txt файл</div>
                 
                 <h2>🔑 Вход</h2>
                 <form action="/login" method="POST">
@@ -137,22 +175,19 @@ app.get('/login', (req, res) => {
                 
                 <h2>📂 Восстановление</h2>
                 <form action="/restore-from-file" method="POST" enctype="multipart/form-data">
-                    <input type="file" name="backupFile" accept=".txt" class="file-input" required>
+                    <input type="file" name="backupFile" accept=".txt" required>
                     <button type="submit">📂 Загрузить из .txt файла</button>
                 </form>
                 
-                ${(GIST_ID && GIST_ID !== 'ВАШ_GIST_ID') ? `
                 <form action="/restore-from-gist" method="POST">
                     <button type="submit" style="background: #28a745;">☁️ Загрузить из Gist</button>
                 </form>
-                ` : ''}
             </div>
         </body>
         </html>
     `);
 });
 
-// Обработчик входа
 app.post('/login', (req, res) => {
     if (req.body.username === '123' && req.body.password === '123') {
         req.session.authenticated = true;
@@ -162,19 +197,15 @@ app.post('/login', (req, res) => {
     }
 });
 
-// Выход
 app.get('/logout', (req, res) => {
     req.session.destroy();
     res.redirect('/login');
 });
 
-// ==================== ВОССТАНОВЛЕНИЕ ИЗ ФАЙЛА ====================
+// ==================== ВОССТАНОВЛЕНИЕ ====================
 app.post('/restore-from-file', upload.single('backupFile'), (req, res) => {
     try {
-        if (!req.file) {
-            console.log('❌ Файл не загружен');
-            return res.redirect('/login?error=no_file');
-        }
+        if (!req.file) return res.redirect('/login?error=no_file');
         
         const fileContent = req.file.buffer.toString('utf-8');
         const base64Match = fileContent.match(/\[ДАННЫЕ В BASE64\]\n([A-Za-z0-9+/=]+)/);
@@ -186,23 +217,21 @@ app.post('/restore-from-file', upload.single('backupFile'), (req, res) => {
             saveToGist();
             console.log(`✅ Восстановлено ${Object.keys(subscriptions).length} ссылок из файла`);
         } else {
-            console.log('❌ Неверный формат файла');
             return res.redirect('/login?error=invalid');
         }
     } catch (e) {
-        console.error('❌ Ошибка восстановления:', e.message);
+        console.error('❌ Ошибка:', e.message);
         return res.redirect('/login?error=invalid');
     }
     res.redirect('/login');
 });
 
-// Восстановление из Gist
 app.post('/restore-from-gist', async (req, res) => {
     await loadFromGist();
     res.redirect('/login');
 });
 
-// ==================== ЭКСПОРТ ВСЕХ ССЫЛОК ====================
+// ==================== ЭКСПОРТ ====================
 app.get('/export-all', isAuthenticated, (req, res) => {
     const exportData = {
         version: '1.0',
@@ -216,18 +245,15 @@ app.get('/export-all', isAuthenticated, (req, res) => {
     
     const fileContent = `VPN SUBSCRIPTIONS BACKUP
 ========================
-Экспорт создан: ${new Date().toLocaleString()}
-Всего ссылок: ${Object.keys(subscriptions).length}
+Экспорт: ${new Date().toLocaleString()}
+Ссылок: ${Object.keys(subscriptions).length}
 ========================
 
 [ДАННЫЕ В BASE64]
 ${base64Data}
 
 ========================
-КАК ВОССТАНОВИТЬ:
-1. Зайдите на сайт
-2. На странице входа нажмите "Загрузить из .txt файла"
-3. Выберите этот файл
+ВОССТАНОВЛЕНИЕ: на странице входа → "Загрузить из .txt файла"
 ========================
 `;
     
@@ -236,7 +262,7 @@ ${base64Data}
     res.send(fileContent);
 });
 
-// ==================== ОСНОВНОЙ ДАШБОРД ====================
+// ==================== ДАШБОРД ====================
 app.get('/', isAuthenticated, (req, res) => {
     let linksHtml = '';
     const linksCount = Object.keys(subscriptions).length;
@@ -249,24 +275,24 @@ app.get('/', isAuthenticated, (req, res) => {
             <div style="margin: 10px 0; padding: 15px; border: 1px solid #333; background: #1e1e1e; border-radius: 8px;">
                 <div style="margin-bottom: 8px;">
                     <code style="color: #0f0; font-size: 16px;">🔗 /p/${id}</code>
-                    <button onclick="copyToClipboard('${id}')" style="background: #1f6392; padding: 5px 10px; font-size: 12px;">📋 Копировать</button>
+                    <button onclick="copyToClipboard('${id}')" style="background: #1f6392; padding: 5px 10px;">📋 Копировать</button>
                 </div>
                 <div style="margin-bottom: 8px; color: #58a6ff;">📝 ${escapeHtml(displayContent)}</div>
                 <div style="margin-bottom: 12px;">👥 ${data.count} переходов</div>
                 <div>
                     <form action="/decrement/${id}" method="POST" style="display: inline;">
-                        <button type="submit" style="background: #ff9800; padding: 6px 12px;">➖ −1</button>
+                        <button type="submit" style="background: #ff9800;">➖ −1</button>
                     </form>
                     <form action="/destroy/${id}" method="POST" style="display: inline;">
-                        <button type="submit" style="background: #8b0000; padding: 6px 12px;" onclick="return confirm('Уничтожить подписку? Конфиг заменится на заглушку!')">💀 Уничтожить</button>
+                        <button type="submit" style="background: #8b0000;" onclick="return confirm('Уничтожить?')">💀 Уничтожить</button>
                     </form>
                     ${data.originalContent ? `
                     <form action="/restore/${id}" method="POST" style="display: inline;">
-                        <button type="submit" style="background: #238636; padding: 6px 12px;">🔄 Восстановить</button>
+                        <button type="submit" style="background: #238636;">🔄 Восстановить</button>
                     </form>
                     ` : ''}
                     <form action="/delete/${id}" method="POST" style="display: inline;">
-                        <button type="submit" style="background: #d32f2f; padding: 6px 12px;" onclick="return confirm('Удалить ссылку навсегда?')">🗑 Удалить</button>
+                        <button type="submit" style="background: #d32f2f;" onclick="return confirm('Удалить навсегда?')">🗑 Удалить</button>
                     </form>
                 </div>
             </div>
@@ -278,50 +304,45 @@ app.get('/', isAuthenticated, (req, res) => {
         <html>
         <head>
             <meta charset="UTF-8">
-            <title>VPN Админка - Управление</title>
+            <title>VPN Админка</title>
             <style>
                 body { font-family: Arial; padding: 20px; background: #0d1117; color: #fff; }
                 .card { background: #161b22; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
-                button { padding: 10px; margin: 5px; border-radius: 6px; border: none; cursor: pointer; }
+                button { padding: 8px 12px; margin: 5px; border-radius: 6px; border: none; cursor: pointer; }
                 input { padding: 10px; width: 300px; background: #0d1117; color: #fff; border: 1px solid #333; border-radius: 6px; }
                 .generate { background: #238636; color: white; }
                 .export { background: #1f6392; color: white; }
                 .logout { background: #d32f2f; float: right; }
-                .stats { color: #58a6ff; font-size: 14px; margin-top: 10px; }
             </style>
             <script>
                 function copyToClipboard(id) {
-                    const url = window.location.origin + '/p/' + id;
-                    navigator.clipboard.writeText(url);
-                    alert('Ссылка скопирована: ' + url);
+                    navigator.clipboard.writeText(window.location.origin + '/p/' + id);
+                    alert('Ссылка скопирована!');
                 }
             </script>
         </head>
         <body>
             <div style="overflow: hidden; margin-bottom: 20px;">
                 <a href="/logout"><button class="logout">🚪 Выйти</button></a>
-                <a href="/export-all"><button class="export">💾 Скачать все ссылки (base64)</button></a>
+                <a href="/export-all"><button class="export">💾 Скачать все ссылки</button></a>
             </div>
-            
             <div class="card">
-                <h1>🔐 Создать новую ссылку</h1>
+                <h1>🔐 Создать ссылку</h1>
                 <form action="/generate" method="POST">
                     <input type="text" name="content" placeholder="Введите конфиг VPN" required>
                     <button type="submit" class="generate">✨ Сгенерировать</button>
                 </form>
             </div>
-            
             <div class="card">
-                <h2>📋 Мои ссылки</h2>
-                <div class="stats">📊 Всего ссылок: ${linksCount}</div>
-                ${linksHtml || '<p style="text-align: center; padding: 40px;">📭 Нет ссылок. Создайте первую!</p>'}
+                <h2>📋 Мои ссылки (${linksCount})</h2>
+                ${linksHtml || '<p>Нет ссылок. Создайте первую!</p>'}
             </div>
         </body>
         </html>
     `);
 });
 
-// ==================== ОСТАЛЬНЫЕ ОБРАБОТЧИКИ ====================
+// ==================== ОБРАБОТЧИКИ ====================
 app.post('/generate', isAuthenticated, (req, res) => {
     const id = generateRandomId();
     subscriptions[id] = {
@@ -382,7 +403,6 @@ app.post('/restore/:id', isAuthenticated, (req, res) => {
     res.redirect('/');
 });
 
-// Функция для экранирования HTML
 function escapeHtml(text) {
     return text.replace(/[&<>]/g, function(m) {
         if (m === '&') return '&amp;';
@@ -392,9 +412,9 @@ function escapeHtml(text) {
     });
 }
 
-// ==================== ЗАПУСК СЕРВЕРА ====================
+// ==================== ЗАПУСК ====================
 app.listen(PORT, async () => {
-    console.log(`🚀 Сервер запущен на порту ${PORT}`);
+    console.log(`🚀 Сервер на порту ${PORT}`);
     console.log(`🔐 Логин: 123, Пароль: 123`);
     await loadFromGist();
 });
