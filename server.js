@@ -36,14 +36,9 @@ function removePrefix(content) {
     return content;
 }
 
-// ==================== РАБОТА С GIST (DataBAse.txt) ====================
+// ==================== РАБОТА С GIST (DataBAse.json) ====================
 async function saveToGist() {
     console.log('💾 Сохраняю в Gist...');
-    
-    if (!GIST_ID || GIST_ID === 'ВАШ_GIST_ID') {
-        console.log('❌ Gist ID не настроен');
-        return;
-    }
     
     try {
         const response = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
@@ -54,7 +49,7 @@ async function saveToGist() {
             },
             body: JSON.stringify({
                 files: {
-                    'DataBAse.txt': {
+                    'DataBAse.json': {
                         content: JSON.stringify(subscriptions, null, 2)
                     }
                 }
@@ -62,13 +57,15 @@ async function saveToGist() {
         });
         
         if (response.ok) {
-            console.log('✅ Данные сохранены в Gist (DataBAse.txt)');
+            console.log('✅ Данные сохранены в Gist (DataBAse.json)');
         } else {
             const errorText = await response.text();
             console.log('❌ Ошибка API:', response.status, errorText);
+            fs.writeFileSync(BACKUP_FILE, JSON.stringify(subscriptions, null, 2));
+            console.log('📁 Сохранено в локальный бэкап');
         }
     } catch (error) {
-        console.error('❌ Ошибка сохранения в Gist:', error.message);
+        console.error('❌ Ошибка сохранения:', error.message);
         fs.writeFileSync(BACKUP_FILE, JSON.stringify(subscriptions, null, 2));
         console.log('📁 Сохранено в локальный бэкап');
     }
@@ -76,11 +73,6 @@ async function saveToGist() {
 
 async function loadFromGist() {
     console.log('📥 Загружаю из Gist...');
-    
-    if (!GIST_ID || GIST_ID === 'ВАШ_GIST_ID') {
-        console.log('❌ Gist ID не настроен');
-        return false;
-    }
     
     try {
         const response = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
@@ -91,19 +83,26 @@ async function loadFromGist() {
         
         if (response.ok) {
             const gist = await response.json();
-            const content = gist.files?.['DataBAse.txt']?.content;
+            const content = gist.files?.['DataBAse.json']?.content;
             
             if (content) {
                 subscriptions = JSON.parse(content);
                 const count = Object.keys(subscriptions).length;
-                console.log(`✅ Загружено ${count} ссылок из Gist (DataBAse.txt)`);
+                console.log(`✅ Загружено ${count} ссылок из Gist (DataBAse.json)`);
                 return true;
             } else {
-                console.log('⚠️ Файл DataBAse.txt пуст');
+                console.log('⚠️ Файл DataBAse.json пуст, начинаем с чистого состояния');
                 return false;
             }
         } else {
             console.log('❌ Ошибка загрузки:', response.status);
+            
+            if (fs.existsSync(BACKUP_FILE)) {
+                const backupData = fs.readFileSync(BACKUP_FILE, 'utf8');
+                subscriptions = JSON.parse(backupData);
+                console.log(`📁 Загружено из локального бэкапа`);
+                return true;
+            }
             return false;
         }
     } catch (error) {
@@ -284,7 +283,7 @@ app.get('/', isAuthenticated, (req, res) => {
                         <button type="submit" style="background: #ff9800;">➖ −1</button>
                     </form>
                     <form action="/destroy/${id}" method="POST" style="display: inline;">
-                        <button type="submit" style="background: #8b0000;" onclick="return confirm('Уничтожить?')">💀 Уничтожить</button>
+                        <button type="submit" style="background: #8b0000;" onclick="return confirm('Уничтожить подписку?')">💀 Уничтожить</button>
                     </form>
                     ${data.originalContent ? `
                     <form action="/restore/${id}" method="POST" style="display: inline;">
@@ -414,7 +413,7 @@ function escapeHtml(text) {
 
 // ==================== ЗАПУСК ====================
 app.listen(PORT, async () => {
-    console.log(`🚀 Сервер на порту ${PORT}`);
+    console.log(`🚀 Сервер запущен на порту ${PORT}`);
     console.log(`🔐 Логин: 123, Пароль: 123`);
     await loadFromGist();
 });
