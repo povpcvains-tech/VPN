@@ -30,7 +30,6 @@ function loadUsers() {
         if (fs.existsSync(USERS_FILE)) {
             users = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
         } else {
-            // Создаем админа по умолчанию
             const hashedPassword = bcrypt.hashSync('123', 10);
             users = {
                 'admin': {
@@ -74,7 +73,6 @@ function removePrefix(content) {
 }
 
 function replaceAddressInConfig(config, newAddress) {
-    // Заменяем адрес и порт в конфиге на 0.0.0.0:443
     return config.replace(/@[\d\.]+:\d+/, `@${newAddress}`);
 }
 
@@ -90,7 +88,7 @@ async function getCountryFromIP(ip) {
     return 'Неизвестно';
 }
 
-// ==================== РАБОТА С GIST (DataBAse.json) ====================
+// ==================== РАБОТА С GIST ====================
 async function saveToGist() {
     console.log('💾 Сохраняю в Gist...');
     
@@ -111,7 +109,7 @@ async function saveToGist() {
         });
         
         if (response.ok) {
-            console.log('✅ Данные сохранены в Gist (DataBAse.json)');
+            console.log('✅ Данные сохранены в Gist');
         } else {
             const errorText = await response.text();
             console.log('❌ Ошибка API:', response.status, errorText);
@@ -142,10 +140,21 @@ async function loadFromGist() {
             if (content) {
                 subscriptions = JSON.parse(content);
                 const count = Object.keys(subscriptions).length;
-                console.log(`✅ Загружено ${count} ссылок из Gist (DataBAse.json)`);
+                console.log(`✅ Загружено ${count} ссылок из Gist`);
+                
+                // Миграция старых данных
+                for (const [id, data] of Object.entries(subscriptions)) {
+                    if (!data.masterConfig && data.content) {
+                        data.masterConfig = data.content;
+                    }
+                    if (!data.devices) {
+                        data.devices = {};
+                    }
+                }
+                
                 return true;
             } else {
-                console.log('⚠️ Файл DataBAse.json пуст, начинаем с чистого состояния');
+                console.log('⚠️ Файл DataBAse.json пуст');
                 return false;
             }
         } else {
@@ -389,11 +398,13 @@ ${base64Data}
     res.send(fileContent);
 });
 
-// ==================== ГЕНЕРАЦИЯ QR-КОДА ====================
-app.get('/qrcode/:id', isAuthenticated, async (req, res) => {
+// ==================== ГЕНЕРАЦИЯ QR-КОДА С НОВЫМ UUID ====================
+app.get('/generate-qrcode/:id', isAuthenticated, async (req, res) => {
     const id = req.params.id;
     if (subscriptions[id]) {
-        const url = `${req.protocol}://${req.get('host')}/p/${id}`;
+        const newDeviceId = uuidv4();
+        const url = `${req.protocol}://${req.get('host')}/p/${id}?deviceId=${newDeviceId}`;
+        
         try {
             const qrCode = await QRCode.toDataURL(url);
             res.send(`
@@ -408,13 +419,14 @@ app.get('/qrcode/:id', isAuthenticated, async (req, res) => {
                         img { background: white; padding: 10px; border-radius: 8px; }
                         button { margin-top: 20px; padding: 10px 20px; background: #238636; color: white; border: none; border-radius: 6px; cursor: pointer; }
                         button:hover { background: #2ea043; }
+                        .info { margin: 10px 0; color: #58a6ff; font-size: 12px; }
                     </style>
                 </head>
                 <body>
                     <div class="container">
-                        <h2>🔗 Ссылка: /p/${id}</h2>
+                        <h2>🔗 QR-код с новым устройством</h2>
                         <img src="${qrCode}" alt="QR Code">
-                        <br>
+                        <div class="info">UUID: ${newDeviceId}</div>
                         <button onclick="window.close()">Закрыть</button>
                     </div>
                 </body>
@@ -434,25 +446,22 @@ app.get('/', isAuthenticated, (req, res) => {
     const linksCount = Object.keys(subscriptions).length;
     
     for (const [id, data] of Object.entries(subscriptions)) {
-        const shortContent = removePrefix(data.masterConfig || data.content).substring(0, 50);
-        const displayContent = shortContent + (removePrefix(data.masterConfig || data.content).length > 50 ? '...' : '');
+        const shortContent = removePrefix(data.masterConfig || data.content || '').substring(0, 50);
+        const displayContent = shortContent + (removePrefix(data.masterConfig || data.content || '').length > 50 ? '...' : '');
         const devicesCount = data.devices ? Object.keys(data.devices).length : 0;
         
         linksHtml += `
             <div style="margin: 10px 0; padding: 15px; border: 1px solid #333; background: #1e1e1e; border-radius: 8px;">
                 <div style="margin-bottom: 8px;">
                     <code style="color: #0f0; font-size: 16px;">🔗 /p/${id}</code>
-                    <button onclick="copyToClipboard('${id}')" style="background: #1f6392; padding: 5px 10px;">📋 Копировать</button>
-                    <button onclick="window.open('/qrcode/${id}', '_blank', 'width=400,height=500')" style="background: #ff9800; padding: 5px 10px;">📱 QR-код</button>
+                    <button onclick="copyWithNewDevice('${id}')" style="background: #1f6392; padding: 5px 10px;">📋 Копировать (новое устр-во)</button>
+                    <button onclick="window.open('/generate-qrcode/${id}', '_blank', 'width=400,height=500')" style="background: #ff9800; padding: 5px 10px;">📱 QR-код (новое устр-во)</button>
                 </div>
                 <div style="margin-bottom: 8px; color: #58a6ff;">📝 ${escapeHtml(displayContent)}</div>
                 <div style="margin-bottom: 12px;">👥 ${data.count || 0} переходов | 📱 ${devicesCount} устройств</div>
                 <div>
                     <button onclick="editLink('${id}')" style="background: #1f6392;">✏️ Изменить</button>
                     <button onclick="showDevices('${id}')" style="background: #6f42c1;">📱 Устройства</button>
-                    <form action="/decrement/${id}" method="POST" style="display: inline;" onsubmit="event.preventDefault(); this.submit();">
-                        <button type="submit" style="background: #ff9800;">➖ −1</button>
-                    </form>
                     <form action="/destroy/${id}" method="POST" style="display: inline;" onsubmit="event.preventDefault(); if(confirm('Уничтожить подписку?')) this.submit();">
                         <button type="submit" style="background: #8b0000;">💀 Уничтожить</button>
                     </form>
@@ -484,16 +493,21 @@ app.get('/', isAuthenticated, (req, res) => {
                 .export { background: #1f6392; color: white; }
                 .logout { background: #d32f2f; float: right; }
                 .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; }
-                .modal-content { background: #161b22; margin: 50px auto; padding: 20px; width: 80%; max-width: 600px; border-radius: 12px; }
+                .modal-content { background: #161b22; margin: 50px auto; padding: 20px; width: 80%; max-width: 600px; border-radius: 12px; max-height: 80vh; overflow-y: auto; }
                 .close { color: #fff; float: right; font-size: 28px; cursor: pointer; }
                 .device-item { padding: 10px; margin: 5px 0; background: #0d1117; border-radius: 6px; }
                 .device-active { border-left: 4px solid #238636; }
                 .device-inactive { border-left: 4px solid #d32f2f; opacity: 0.7; }
             </style>
             <script>
-                function copyToClipboard(id) {
-                    navigator.clipboard.writeText(window.location.origin + '/p/' + id);
-                    alert('Ссылка скопирована!');
+                function copyWithNewDevice(id) {
+                    const newDeviceId = crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                        const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+                        return v.toString(16);
+                    });
+                    const url = window.location.origin + '/p/' + id + '?deviceId=' + newDeviceId;
+                    navigator.clipboard.writeText(url);
+                    alert('✅ Ссылка скопирована с новым устройством!\\nUUID: ' + newDeviceId);
                 }
                 
                 function editLink(id) {
@@ -520,13 +534,19 @@ app.get('/', isAuthenticated, (req, res) => {
                                         <div class="device-item \${device.active ? 'device-active' : 'device-inactive'}">
                                             <strong>\${device.name}</strong><br>
                                             IP: \${device.ip}<br>
+                                            UUID: \${uuid}<br>
+                                            Первый вход: \${new Date(device.firstSeen).toLocaleString()}<br>
                                             Последняя активность: \${new Date(device.lastSeen).toLocaleString()}<br>
                                             Статус: \${device.active ? '✅ Активно' : '❌ Неактивно'}<br>
                                             \${device.active ? \`
                                                 <button onclick="deactivateDevice('\${id}', '\${uuid}')" style="background: #d32f2f; margin-top: 5px;">
                                                     ➖ Деактивировать
                                                 </button>
-                                            \` : ''}
+                                            \` : \`
+                                                <button onclick="restoreDevice('\${id}', '\${uuid}')" style="background: #238636; margin-top: 5px;">
+                                                    🔄 Восстановить
+                                                </button>
+                                            \`}
                                         </div>
                                     \`;
                                 }
@@ -538,12 +558,21 @@ app.get('/', isAuthenticated, (req, res) => {
                 }
                 
                 function deactivateDevice(linkId, deviceId) {
-                    if (confirm('Деактивировать устройство?')) {
+                    if (confirm('Деактивировать устройство? Конфиг будет изменен на нерабочий.')) {
                         fetch('/deactivate-device/' + linkId + '/' + deviceId, {
                             method: 'POST'
                         }).then(() => {
-                            closeModal();
-                            location.reload();
+                            showDevices(linkId);
+                        });
+                    }
+                }
+                
+                function restoreDevice(linkId, deviceId) {
+                    if (confirm('Восстановить устройство?')) {
+                        fetch('/restore-device/' + linkId + '/' + deviceId, {
+                            method: 'POST'
+                        }).then(() => {
+                            showDevices(linkId);
                         });
                     }
                 }
@@ -587,7 +616,7 @@ app.post('/generate', isAuthenticated, (req, res) => {
     const id = generateRandomId();
     subscriptions[id] = {
         masterConfig: addPrefix(req.body.content),
-        content: addPrefix(req.body.content), // для обратной совместимости
+        content: addPrefix(req.body.content),
         originalContent: null,
         count: 0,
         devices: {},
@@ -623,9 +652,23 @@ app.post('/deactivate-device/:linkId/:deviceId', isAuthenticated, (req, res) => 
     if (subscriptions[linkId] && subscriptions[linkId].devices && subscriptions[linkId].devices[deviceId]) {
         const device = subscriptions[linkId].devices[deviceId];
         device.active = false;
-        device.name = device.name.replace(': Неактивно', '') + ': Неактивно';
-        // Меняем адрес в персональном конфиге на 0.0.0.0:443
+        device.name = device.name.replace(': Неактивно', '').trim() + ': Неактивно';
         device.config = replaceAddressInConfig(device.config, '0.0.0.0:443');
+        saveToGist();
+        res.json({success: true});
+    } else {
+        res.status(404).json({error: 'Not found'});
+    }
+});
+
+app.post('/restore-device/:linkId/:deviceId', isAuthenticated, (req, res) => {
+    const { linkId, deviceId } = req.params;
+    if (subscriptions[linkId] && subscriptions[linkId].devices && subscriptions[linkId].devices[deviceId]) {
+        const device = subscriptions[linkId].devices[deviceId];
+        device.active = true;
+        device.name = device.name.replace(': Неактивно', '').trim();
+        // Восстанавливаем оригинальный конфиг из masterConfig
+        device.config = subscriptions[linkId].masterConfig;
         saveToGist();
         res.json({success: true});
     } else {
@@ -636,11 +679,11 @@ app.post('/deactivate-device/:linkId/:deviceId', isAuthenticated, (req, res) => 
 app.get('/p/:id', async (req, res) => {
     const id = req.params.id;
     if (subscriptions[id]) {
-        // Генерируем UUID для устройства если его нет
         let deviceId = req.query.deviceId;
+        
+        // Если нет deviceId, создаем новый
         if (!deviceId) {
             deviceId = uuidv4();
-            // Редирект на URL с UUID
             return res.redirect(`/p/${id}?deviceId=${deviceId}`);
         }
         
@@ -650,13 +693,13 @@ app.get('/p/:id', async (req, res) => {
         const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
         const country = await getCountryFromIP(ip);
         
-        // Проверяем, существует ли устройство
+        // Инициализируем devices если нет
         if (!subscriptions[id].devices) {
             subscriptions[id].devices = {};
         }
         
+        // Создаем или обновляем устройство
         if (!subscriptions[id].devices[deviceId]) {
-            // Создаем новое устройство с персональным конфигом
             subscriptions[id].devices[deviceId] = {
                 name: country,
                 ip: ip,
@@ -664,10 +707,9 @@ app.get('/p/:id', async (req, res) => {
                 firstSeen: new Date().toISOString(),
                 lastSeen: new Date().toISOString(),
                 active: true,
-                config: subscriptions[id].masterConfig || subscriptions[id].content // персональная копия конфига
+                config: subscriptions[id].masterConfig || subscriptions[id].content
             };
         } else {
-            // Обновляем время последнего доступа
             subscriptions[id].devices[deviceId].lastSeen = new Date().toISOString();
             subscriptions[id].devices[deviceId].ip = ip;
         }
@@ -678,20 +720,15 @@ app.get('/p/:id', async (req, res) => {
         const device = subscriptions[id].devices[deviceId];
         const configToSend = device.active ? device.config : DESTROY_CONFIG;
         
+        // Запрещаем кеширование
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
         res.send(configToSend);
     } else {
         res.status(404).send('Link not found');
     }
-});
-
-app.post('/decrement/:id', isAuthenticated, (req, res) => {
-    const id = req.params.id;
-    if (subscriptions[id] && subscriptions[id].count > 0) {
-        subscriptions[id].count--;
-        saveToGist();
-    }
-    res.redirect('/');
 });
 
 app.post('/delete/:id', isAuthenticated, (req, res) => {
@@ -708,6 +745,15 @@ app.post('/destroy/:id', isAuthenticated, (req, res) => {
         }
         subscriptions[id].masterConfig = addPrefix(DESTROY_CONFIG);
         subscriptions[id].content = addPrefix(DESTROY_CONFIG);
+        
+        // Деактивируем все устройства
+        if (subscriptions[id].devices) {
+            for (const deviceId in subscriptions[id].devices) {
+                subscriptions[id].devices[deviceId].active = false;
+                subscriptions[id].devices[deviceId].config = DESTROY_CONFIG;
+            }
+        }
+        
         saveToGist();
     }
     res.redirect('/');
@@ -719,6 +765,15 @@ app.post('/restore/:id', isAuthenticated, (req, res) => {
         subscriptions[id].masterConfig = subscriptions[id].originalContent;
         subscriptions[id].content = subscriptions[id].originalContent;
         subscriptions[id].originalContent = null;
+        
+        // Восстанавливаем все устройства
+        if (subscriptions[id].devices) {
+            for (const deviceId in subscriptions[id].devices) {
+                subscriptions[id].devices[deviceId].active = true;
+                subscriptions[id].devices[deviceId].config = subscriptions[id].masterConfig;
+            }
+        }
+        
         saveToGist();
     }
     res.redirect('/');
