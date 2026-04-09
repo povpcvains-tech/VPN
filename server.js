@@ -40,7 +40,6 @@ function loadUsers() {
             };
             fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
         }
-        // Миграция
         let migrated = false;
         for (const username in users) {
             if (!users[username].role) { users[username].role = 'user'; migrated = true; }
@@ -110,7 +109,6 @@ function applyDestroyConfig(sub) {
     }
 }
 
-// 🔥 ИСПРАВЛЕНИЕ БАГА: Обновляет конфиг для всех активных устройств при изменении мастер-конфига
 function updateAllDevicesConfig(subId) {
     const sub = subscriptions[subId];
     if (!sub || !sub.devices) return;
@@ -163,7 +161,6 @@ async function loadFromGist() {
             const content = gist.files?.['DataBAse.json']?.content;
             if (content) {
                 subscriptions = JSON.parse(content);
-                // Миграция данных
                 for (const [id, data] of Object.entries(subscriptions)) {
                     if (!data.masterConfig && data.content) data.masterConfig = data.content;
                     if (!data.devices) data.devices = {};
@@ -197,7 +194,7 @@ async function loadFromGist() {
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(session({
-    secret: 'vpn-secret-v1.8-full',
+    secret: 'vpn-secret-v1.9-fixed',
     resave: false,
     saveUninitialized: false,
     cookie: { maxAge: 24 * 60 * 60 * 1000, httpOnly: true }
@@ -230,7 +227,7 @@ app.get('/register', (req, res) => {
     .error{background:#f8d7da;color:#721c24;padding:10px;border-radius:8px;margin-bottom:15px;}
     .link{text-align:center;margin-top:15px;}.link a{color:#667eea;text-decoration:none;}</style></head>
     <body><div class="c"><h1>📝 Register</h1>
-    ${error ? `<div class="error">${error}</div>` : ''}
+    ${error ? '<div class="error">' + error + '</div>' : ''}
     <form action="/register" method="POST">
         <input type="text" name="username" placeholder="Login (min 3 chars)" required minlength="3">
         <input type="password" name="password" placeholder="Password (min 6 chars)" required minlength="6">
@@ -270,8 +267,8 @@ app.get('/login', (req, res) => {
     .success{background:#d4edda;color:#155724;padding:10px;border-radius:8px;margin-bottom:15px;}
     .link{text-align:center;margin-top:15px;}.link a{color:#667eea;text-decoration:none;}</style></head>
     <body><div class="c"><h1>🔐 VPN Admin</h1>
-    ${error ? `<div class="error">${error}</div>` : ''}
-    ${registered ? `<div class="success">${registered}</div>` : ''}
+    ${error ? '<div class="error">' + error + '</div>' : ''}
+    ${registered ? '<div class="success">' + registered + '</div>' : ''}
     <form action="/login" method="POST">
         <input type="text" name="username" placeholder="Login" required>
         <input type="password" name="password" placeholder="Password" required>
@@ -328,7 +325,7 @@ app.post('/api/change-password', isAuthenticated, express.json(), (req, res) => 
     res.json({success: true});
 });
 
-// ==================== ГЛАВНЫЙ ДАШБОРД (ПОЛНАЯ ВЕРСИЯ) ====================
+// ==================== ГЛАВНЫЙ ДАШБОРД (ИСПРАВЛЕННЫЕ КНОПКИ) ====================
 app.get('/', isAuthenticated, (req, res) => {
     if (!isDataLoaded) return res.send('<h1 style="color:white;text-align:center;padding:50px;">⏳ Loading data... Please refresh in 5 seconds.</h1><script>setTimeout(()=>location.reload(), 5000);</script>');
     
@@ -344,39 +341,35 @@ app.get('/', isAuthenticated, (req, res) => {
                        (isTrafficLimitExceeded(data) ? '📊 TRAFFIC LIMIT' : '✅ ACTIVE'));
         const statusColor = data.isDestroyed || isSubscriptionExpired(data) ? '#d32f2f' : '#238636';
         
-        linksHtml += `
-            <div style="margin:10px 0;padding:15px;border:1px solid #333;background:#1e1e1e;border-radius:8px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                    <code style="color:#0f0;font-size:16px;">🔗 /p/${id}</code>
-                    <span style="color:${statusColor};font-weight:bold;">${status}</span>
-                </div>
-                <div style="color:#8b949e;font-size:13px;margin-bottom:10px;">
-                    📝 ${data.name || 'No Name'} | 👤 ${data.owner} | 📱 ${Object.keys(data.devices||{}).length}/${data.maxDevices || '∞'} | 
-                    ⏰ ${data.expiryDate ? new Date(data.expiryDate).toLocaleDateString() : '∞'} |
-                    🌐 ${data.trafficLimit ? ((Object.values(data.devices||{}).reduce((s,d)=>s+(d.trafficUsed||0),0)/data.trafficLimit*100).toFixed(1)+'%') : '∞'}
-                </div>
-                <div>
-                    <button onclick="window.extendSubscription('${id}')" style="background:#238636;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;font-weight:bold;">💰 Продлить</button>
-                    <button onclick="window.copyLink('${id}')" style="background:#1f6392;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;margin-left:5px;">📋 Копировать</button>
-                    <button onclick="window.showQR('${id}')" style="background:#ff9800;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;margin-left:5px;">📱 QR</button>
-                    <button onclick="window.showDevices('${id}')" style="background:#6f42c1;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;margin-left:5px;">👁 Устройства</button>
-                    <button onclick="window.editSub('${id}')" style="background:#1f6392;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;margin-left:5px;">✏️ Изм.</button>
-                    <button onclick="window.deleteSub('${id}')" style="background:#d32f2f;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;margin-left:5px;">🗑 Удалить</button>
-                </div>
-            </div>`;
+        linksHtml += '<div style="margin:10px 0;padding:15px;border:1px solid #333;background:#1e1e1e;border-radius:8px;">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">' +
+            '<code style="color:#0f0;font-size:16px;">🔗 /p/' + id + '</code>' +
+            '<span style="color:' + statusColor + ';font-weight:bold;">' + status + '</span></div>' +
+            '<div style="color:#8b949e;font-size:13px;margin-bottom:10px;">' +
+            '📝 ' + (data.name || 'No Name') + ' | 👤 ' + data.owner + ' | 📱 ' + Object.keys(data.devices||{}).length + '/' + (data.maxDevices || '∞') + ' | ' +
+            '⏰ ' + (data.expiryDate ? new Date(data.expiryDate).toLocaleDateString() : '∞') + ' | ' +
+            '🌐 ' + (data.trafficLimit ? ((Object.values(data.devices||{}).reduce((s,d)=>s+(d.trafficUsed||0),0)/data.trafficLimit*100).toFixed(1)+'%') : '∞') +
+            '</div>' +
+            '<div>' +
+            '<button onclick="extendSubscription(\'' + id + '\')" style="background:#238636;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;font-weight:bold;">💰 Продлить</button> ' +
+            '<button onclick="copyLink(\'' + id + '\')" style="background:#1f6392;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">📋 Копировать</button> ' +
+            '<button onclick="showQR(\'' + id + '\')" style="background:#ff9800;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">📱 QR</button> ' +
+            '<button onclick="showDevices(\'' + id + '\')" style="background:#6f42c1;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">👁 Устройства</button> ' +
+            '<button onclick="editSub(\'' + id + '\')" style="background:#1f6392;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">✏️ Изм.</button> ' +
+            '<button onclick="deleteSub(\'' + id + '\')" style="background:#d32f2f;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">🗑 Удалить</button>' +
+            '</div></div>';
     }
     
     const adminBtn = isSuperAdmin ? '<a href="/admin/users" style="float:right;margin-right:10px;color:#fff;text-decoration:none;"><button style="background:#8b4513;color:white;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;">👥 Users</button></a>' : '';
 
-    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>VPN Admin Full</title>
+    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>VPN Admin</title>
     <style>body{font-family:Arial;padding:20px;background:#0d1117;color:#fff;}
     .card{background:#161b22;padding:20px;border-radius:12px;margin-bottom:20px;}
     button{padding:8px 12px;margin:5px;border-radius:6px;border:none;cursor:pointer;}
     input,textarea,select{padding:10px;width:100%;background:#0d1117;color:#fff;border:1px solid #333;border-radius:6px;margin:5px 0;box-sizing:border-box;}
     .modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:1000;}
     .modal-content{background:#161b22;margin:5% auto;padding:20px;width:90%;max-width:500px;border-radius:12px;max-height:80vh;overflow-y:auto;}
-    .close{color:#fff;float:right;font-size:24px;cursor:pointer;}
-    .dev-item{background:#0d1117;padding:10px;margin:5px 0;border-radius:6px;border-left:3px solid #238636;}</style></head>
+    .close{color:#fff;float:right;font-size:24px;cursor:pointer;}</style></head>
     <body>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
             <h2 style="margin:0;">👤 ${req.session.userId}</h2>
@@ -408,75 +401,62 @@ app.get('/', isAuthenticated, (req, res) => {
             ${linksHtml || '<p style="color:#8b949e;">Нет подписок.</p>'}
         </div>
         
-        <!-- МОДАЛЬНОЕ ОКНО -->
         <div id="mainModal" class="modal"><div class="modal-content"><span class="close" onclick="document.getElementById('mainModal').style.display='none'">&times;</span><div id="modalBody"></div></div></div>
         
         <script>
-            window.copyLink = function(id) {
-                const url = window.location.origin + '/p/' + id;
-                navigator.clipboard.writeText(url).then(() => alert('✅ Copied!'));
-            };
-            
-            window.deleteSub = function(id) {
-                if(confirm('Delete ' + id + '?')) fetch('/delete/' + id, { method: 'POST' }).then(() => location.reload());
-            };
-
-            window.showQR = function(id) {
+            function copyLink(id) {
+                navigator.clipboard.writeText(window.location.origin + '/p/' + id).then(() => alert('✅ Copied!'));
+            }
+            function deleteSub(id) {
+                if(confirm('Delete ' + id + '?')) {
+                    fetch('/delete/' + id, {method:'POST'}).then(() => location.reload());
+                }
+            }
+            function showQR(id) {
                 window.open('/generate-qrcode/' + id, '_blank', 'width=400,height=500');
-            };
-
-            window.editSub = function(id) {
+            }
+            function editSub(id) {
                 const newConf = prompt('Enter new config:');
-                if(newConf) fetch('/edit/' + id, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({content: newConf}) }).then(() => location.reload());
-            };
-
-            window.showDevices = function(id) {
+                if(newConf) {
+                    fetch('/edit/' + id, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: newConf})})
+                    .then(() => location.reload());
+                }
+            }
+            function showDevices(id) {
                 fetch('/devices/' + id).then(r => r.json()).then(devs => {
                     let html = '<h3>📱 Devices for ' + id + '</h3>';
                     for(const [uuid, d] of Object.entries(devs)) {
-                        html += '<div class="dev-item" style="border-color:' + (d.active ? '#238636' : '#d32f2f') + '">';
-                        html += '<b>' + (d.name||'Unknown') + '</b><br>';
-                        html += 'IP: ' + d.ip + '<br>';
-                        html += 'Country: ' + (d.country||'Unknown') + '<br>';
-                        html += 'Traffic: ' + ((d.trafficUsed||0)/1024/1024).toFixed(2) + ' MB<br>';
-                        html += 'Status: ' + (d.active ? 'Active' : 'Inactive');
-                        if(!d.active) html += ' <button onclick="restoreDev(\''+id+'\',\''+uuid+'\')" style="background:#238636;color:white;border:none;padding:2px 5px;border-radius:3px;">Restore</button>';
-                        else html += ' <button onclick="killDev(\''+id+'\',\''+uuid+'\')" style="background:#d32f2f;color:white;border:none;padding:2px 5px;border-radius:3px;">Kill</button>';
+                        const color = d.active ? '#238636' : '#d32f2f';
+                        const status = d.active ? 'Active' : 'Inactive';
+                        const btn = d.active 
+                            ? '<button onclick="killDev(\\''+id+'\\',\\''+uuid+'\\')" style="background:#d32f2f;color:white;border:none;padding:2px 5px;border-radius:3px;">Kill</button>'
+                            : '<button onclick="restoreDev(\\''+id+'\\',\\''+uuid+'\\')" style="background:#238636;color:white;border:none;padding:2px 5px;border-radius:3px;">Restore</button>';
+                        html += '<div style="background:#0d1117;padding:10px;margin:5px 0;border-radius:6px;border-left:3px solid '+color+';">';
+                        html += '<b>' + (d.name||'Unknown') + '</b><br>IP: ' + d.ip + '<br>Status: ' + status + '<br>' + btn;
                         html += '</div>';
                     }
                     document.getElementById('modalBody').innerHTML = html;
                     document.getElementById('mainModal').style.display = 'block';
                 });
-            };
-
-            window.killDev = function(id, uuid) {
-                fetch('/deactivate-device/' + id + '/' + uuid, {method:'POST'}).then(() => window.showDevices(id));
-            };
-            window.restoreDev = function(id, uuid) {
-                fetch('/restore-device/' + id + '/' + uuid, {method:'POST'}).then(() => window.showDevices(id));
-            };
-
-            window.extendSubscription = function(id) {
+            }
+            function killDev(id, uuid) { fetch('/deactivate-device/' + id + '/' + uuid, {method:'POST'}).then(() => showDevices(id)); }
+            function restoreDev(id, uuid) { fetch('/restore-device/' + id + '/' + uuid, {method:'POST'}).then(() => showDevices(id)); }
+            
+            function extendSubscription(id) {
                 const html = '<h3>💰 Продлить ' + id + '</h3>' +
                     '<p>Duration:</p><select id="extUnit"><option value="days" selected>Days</option><option value="hours">Hours</option><option value="months">Months</option></select>' +
                     '<input type="number" id="extValue" value="30" min="1">' +
                     '<p>Max Devices (0=∞):</p><input type="number" id="extDevices" value="0" min="0">' +
                     '<p>Traffic MB (0=∞):</p><input type="number" id="extTraffic" value="0" min="0">' +
-                    '<button id="btnSubmit" style="background:#238636;color:white;width:100%;padding:12px;border:none;border-radius:6px;cursor:pointer;font-weight:bold;margin-top:15px;">✅ Продлить</button>';
-                
+                    '<button onclick="submitExtension(\\''+id+'\\')" style="background:#238636;color:white;width:100%;padding:12px;border:none;border-radius:6px;cursor:pointer;font-weight:bold;margin-top:15px;">✅ Продлить</button>';
                 document.getElementById('modalBody').innerHTML = html;
                 document.getElementById('mainModal').style.display = 'block';
-                
-                document.getElementById('btnSubmit').onclick = function() {
-                    window.submitExtension(id);
-                };
-            };
-
-            window.submitExtension = function(id) {
-                const btn = document.getElementById('btnSubmit');
+            }
+            
+            function submitExtension(id) {
+                const btn = event.target;
                 btn.innerHTML = '⏳ Processing...';
                 btn.disabled = true;
-                
                 fetch('/api/extend/' + id, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -486,14 +466,11 @@ app.get('/', isAuthenticated, (req, res) => {
                         maxDevices: parseInt(document.getElementById('extDevices').value),
                         trafficLimit: parseInt(document.getElementById('extTraffic').value)
                     })
-                })
-                .then(r => r.json())
-                .then(res => {
-                    if(res.success) { alert('✅ Extended!'); location.reload(); } 
+                }).then(r => r.json()).then(res => {
+                    if(res.success) { alert('✅ Extended!'); location.reload(); }
                     else { alert('❌ Error'); btn.disabled = false; btn.innerHTML = '✅ Extend'; }
-                })
-                .catch(e => { alert('❌ Network Error'); btn.disabled = false; btn.innerHTML = '✅ Extend'; });
-            };
+                }).catch(e => { alert('❌ Network Error'); btn.disabled = false; btn.innerHTML = '✅ Extend'; });
+            }
         </script>
     </body></html>`);
 });
@@ -531,7 +508,7 @@ app.post('/edit/:id', isAuthenticated, express.json(), (req, res) => {
     if (subscriptions[id]) {
         subscriptions[id].masterConfig = addPrefix(req.body.content);
         subscriptions[id].content = addPrefix(req.body.content);
-        updateAllDevicesConfig(id); // 🔥 Обновляем для всех устройств
+        updateAllDevicesConfig(id);
         saveToGist();
         res.json({success: true});
     } else res.status(404).json({error: 'Not found'});
@@ -573,7 +550,6 @@ app.post('/api/extend/:id', isAuthenticated, express.json(), (req, res) => {
         if (maxDevices !== undefined) sub.maxDevices = parseInt(maxDevices);
         if (trafficLimit !== undefined) sub.trafficLimit = parseInt(trafficLimit) > 0 ? parseInt(trafficLimit) * 1024 * 1024 : 0;
         
-        // 🔥 Восстановление если подписка была уничтожена
         if (sub.isDestroyed && sub.originalContent) {
             sub.masterConfig = sub.originalContent;
             sub.content = sub.originalContent;
@@ -608,12 +584,14 @@ app.get('/admin/users', isAuthenticated, isAdmin, (req, res) => {
     let usersHtml = '';
     for (const [username, user] of Object.entries(users)) {
         const linksCount = Object.values(subscriptions).filter(s => s.owner === username).length;
-        usersHtml += `<div style="margin:10px 0;padding:15px;border:1px solid #333;background:#1e1e1e;border-radius:8px;">
-            <strong>👤 ${username}</strong> (${user.role})<br>Links: ${linksCount} | Blocked: ${user.blocked}
-            <div style="margin-top:5px;">
-                ${user.blocked ? `<button onclick="unblock('${username}')" style="background:#238636;color:white;border:none;padding:5px;">Unblock</button>` : `<button onclick="block('${username}')" style="background:#d32f2f;color:white;border:none;padding:5px;">Block</button>`}
-                <button onclick="delUser('${username}')" style="background:#d32f2f;color:white;border:none;padding:5px;">Delete</button>
-            </div></div>`;
+        usersHtml += '<div style="margin:10px 0;padding:15px;border:1px solid #333;background:#1e1e1e;border-radius:8px;">' +
+            '<strong>👤 ' + username + '</strong> (' + user.role + ')<br>Links: ' + linksCount + ' | Blocked: ' + user.blocked +
+            '<div style="margin-top:5px;">' +
+            (user.blocked 
+                ? '<button onclick="unblock(\\''+username+'\\')" style="background:#238636;color:white;border:none;padding:5px;">Unblock</button>'
+                : '<button onclick="block(\\''+username+'\\')" style="background:#d32f2f;color:white;border:none;padding:5px;">Block</button>') +
+            ' <button onclick="delUser(\\''+username+'\\')" style="background:#d32f2f;color:white;border:none;padding:5px;">Delete</button>' +
+            '</div></div>';
     }
     res.send(`<!DOCTYPE html><html><body style="background:#0d1117;color:white;padding:20px;">
     <h1>👥 User Management</h1><a href="/"><button style="background:#6e7681;color:white;border:none;padding:10px;">Back</button></a>
@@ -636,10 +614,10 @@ app.post('/api/delete-user', isAuthenticated, isAdmin, express.json(), (req, res
 });
 
 app.get('/export-all', isAuthenticated, (req, res) => {
-    const data = JSON.stringify({ version: '1.8', subscriptions }, null, 2);
+    const data = JSON.stringify({ version: '1.9', subscriptions }, null, 2);
     const b64 = Buffer.from(data).toString('base64');
     res.setHeader('Content-Disposition', 'attachment; filename=backup.txt');
-    res.send(`VPN BACKUP\n[ДАННЫЕ В BASE64]\n${b64}`);
+    res.send('VPN BACKUP\n[ДАННЫЕ В BASE64]\n' + b64);
 });
 
 // ==================== ПОТРЕБИТЕЛЬСКАЯ ССЫЛКА (/p/:id) ====================
@@ -650,7 +628,7 @@ app.get('/p/:id', async (req, res) => {
     
     const sub = subscriptions[id];
     let deviceId = req.query.deviceId;
-    if (!deviceId) { deviceId = uuidv4(); return res.redirect(`/p/${id}?deviceId=${deviceId}`); }
+    if (!deviceId) { deviceId = uuidv4(); return res.redirect('/p/' + id + '?deviceId=' + deviceId); }
     
     sub.count = (sub.count || 0) + 1;
     const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.connection?.remoteAddress || '0.0.0.0';
@@ -674,7 +652,6 @@ app.get('/p/:id', async (req, res) => {
         device.lastSeen = new Date().toISOString();
         device.ip = ip;
         if (device.country !== country) device.country = country;
-        // 🔥 Обновляем конфиг для устройства, если мастер-конфиг изменился
         if (device.active && !sub.isDestroyed && device.config !== sub.masterConfig) device.config = sub.masterConfig;
         device.trafficUsed = (device.trafficUsed || 0) + Buffer.byteLength(device.config, 'utf8');
     }
