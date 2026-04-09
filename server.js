@@ -62,7 +62,6 @@ function saveUsers() {
 function generateRandomId() { return Math.random().toString(36).substring(2, 8); }
 function addPrefix(content) { return content.startsWith(PROFILE_PREFIX) ? content : PROFILE_PREFIX + content; }
 function removePrefix(content) { return content.startsWith(PROFILE_PREFIX) ? content.substring(PROFILE_PREFIX.length) : content; }
-function replaceAddressInConfig(config, newAddress) { return config.replace(/@[\d\.]+:\d+/, `@${newAddress}`); }
 
 async function getCountryFromIP(ip) {
     try {
@@ -105,16 +104,6 @@ function applyDestroyConfig(sub) {
         for (const deviceId in sub.devices) {
             sub.devices[deviceId].active = false;
             sub.devices[deviceId].config = DESTROY_CONFIG;
-        }
-    }
-}
-
-function updateAllDevicesConfig(subId) {
-    const sub = subscriptions[subId];
-    if (!sub || !sub.devices) return;
-    for (const deviceId in sub.devices) {
-        if (sub.devices[deviceId].active && !sub.isDestroyed) {
-            sub.devices[deviceId].config = sub.masterConfig;
         }
     }
 }
@@ -325,7 +314,7 @@ app.post('/api/change-password', isAuthenticated, express.json(), (req, res) => 
     res.json({success: true});
 });
 
-// ==================== ГЛАВНЫЙ ДАШБОРД (С АВТО-ГЕНЕРАЦИЕЙ UUID ПРИ КОПИРОВАНИИ) ====================
+// ==================== ГЛАВНЫЙ ДАШБОРД ====================
 app.get('/', isAuthenticated, (req, res) => {
     if (!isDataLoaded) return res.send('<h1 style="color:white;text-align:center;padding:50px;">⏳ Loading data... Please refresh in 5 seconds.</h1><script>setTimeout(()=>location.reload(), 5000);</script>');
     
@@ -352,9 +341,8 @@ app.get('/', isAuthenticated, (req, res) => {
             '</div>' +
             '<div>' +
             '<button onclick="extendSubscription(\'' + id + '\')" style="background:#238636;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;font-weight:bold;">💰 Продлить</button> ' +
-            '<button onclick="copyLinkWithUUID(\'' + id + '\')" style="background:#1f6392;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">📋 Копировать (с UUID)</button> ' +
-            '<button onclick="copySimpleLink(\'' + id + '\')" style="background:#6e7681;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">🔗 Только ссылку</button> ' +
-            '<button onclick="showQR(\'' + id + '\')" style="background:#ff9800;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">📱 QR</button> ' +
+            '<button onclick="copyWithNewUUID(\'' + id + '\')" style="background:#1f6392;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">📋 Копировать с новым UUID</button> ' +
+            '<button onclick="showQR(\'' + id + '\')" style="background:#ff9800;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">📱 QR код</button> ' +
             '<button onclick="showDevices(\'' + id + '\')" style="background:#6f42c1;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">👁 Устройства</button> ' +
             '<button onclick="editSub(\'' + id + '\')" style="background:#1f6392;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">✏️ Изм.</button> ' +
             '<button onclick="deleteSub(\'' + id + '\')" style="background:#d32f2f;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">🗑 Удалить</button>' +
@@ -371,7 +359,7 @@ app.get('/', isAuthenticated, (req, res) => {
     .modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:1000;}
     .modal-content{background:#161b22;margin:5% auto;padding:20px;width:90%;max-width:500px;border-radius:12px;max-height:80vh;overflow-y:auto;}
     .close{color:#fff;float:right;font-size:24px;cursor:pointer;}
-    .toast{position:fixed;bottom:20px;right:20px;background:#238636;color:white;padding:12px 24px;border-radius:8px;z-index:2000;animation:fadeOut 2s forwards;}
+    .toast{position:fixed;bottom:20px;right:20px;background:#238636;color:white;padding:12px 24px;border-radius:8px;z-index:2000;animation:fadeOut 3s forwards;}
     @keyframes fadeOut{0%{opacity:1;}70%{opacity:1;}100%{opacity:0;visibility:hidden;}}</style></head>
     <body>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
@@ -412,28 +400,17 @@ app.get('/', isAuthenticated, (req, res) => {
                 toast.className = 'toast';
                 toast.innerText = msg;
                 document.body.appendChild(toast);
-                setTimeout(() => toast.remove(), 2000);
+                setTimeout(() => toast.remove(), 3000);
             }
             
-            async function copyLinkWithUUID(id) {
-                try {
-                    const response = await fetch('/api/generate-uuid/' + id, {method: 'POST'});
-                    const data = await response.json();
-                    if(data.success) {
-                        const url = window.location.origin + '/p/' + id + '?deviceId=' + data.uuid;
-                        await navigator.clipboard.writeText(url);
-                        showToast('✅ Скопировано с UUID: ' + data.uuid.substring(0, 8) + '...');
-                    } else {
-                        showToast('❌ Ошибка: ' + data.error);
-                    }
-                } catch(e) {
-                    showToast('❌ Ошибка при генерации UUID');
-                }
-            }
-            
-            function copySimpleLink(id) {
-                navigator.clipboard.writeText(window.location.origin + '/p/' + id);
-                showToast('✅ Скопирована ссылка без UUID');
+            function copyWithNewUUID(id) {
+                const newUUID = crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                    const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+                    return v.toString(16);
+                });
+                const url = window.location.origin + '/p/' + id + '?deviceId=' + newUUID;
+                navigator.clipboard.writeText(url);
+                showToast('✅ Скопировано! UUID: ' + newUUID.substring(0, 8) + '...');
             }
             
             function deleteSub(id) {
@@ -443,7 +420,7 @@ app.get('/', isAuthenticated, (req, res) => {
             }
             
             function showQR(id) {
-                window.open('/generate-qrcode/' + id, '_blank', 'width=400,height=500');
+                window.open('/generate-qrcode/' + id, '_blank', 'width=450,height=550');
             }
             
             function editSub(id) {
@@ -457,6 +434,9 @@ app.get('/', isAuthenticated, (req, res) => {
             function showDevices(id) {
                 fetch('/devices/' + id).then(r => r.json()).then(devs => {
                     let html = '<h3>📱 Devices for ' + id + '</h3>';
+                    if(Object.keys(devs).length === 0) {
+                        html += '<p>Нет подключенных устройств</p>';
+                    }
                     for(const [uuid, d] of Object.entries(devs)) {
                         const color = d.active ? '#238636' : '#d32f2f';
                         const status = d.active ? 'Active' : 'Inactive';
@@ -464,7 +444,7 @@ app.get('/', isAuthenticated, (req, res) => {
                             ? '<button onclick="killDev(\\''+id+'\\',\\''+uuid+'\\')" style="background:#d32f2f;color:white;border:none;padding:2px 5px;border-radius:3px;">Kill</button>'
                             : '<button onclick="restoreDev(\\''+id+'\\',\\''+uuid+'\\')" style="background:#238636;color:white;border:none;padding:2px 5px;border-radius:3px;">Restore</button>';
                         html += '<div style="background:#0d1117;padding:10px;margin:5px 0;border-radius:6px;border-left:3px solid '+color+';">';
-                        html += '<b>' + (d.name||'Unknown') + '</b><br>IP: ' + d.ip + '<br>Status: ' + status + '<br>' + btn;
+                        html += '<b>' + (d.name||'Unknown') + '</b><br>IP: ' + d.ip + '<br>Status: ' + status + '<br>UUID: ' + uuid.substring(0, 8) + '...<br>' + btn;
                         html += '</div>';
                     }
                     document.getElementById('modalBody').innerHTML = html;
@@ -508,39 +488,6 @@ app.get('/', isAuthenticated, (req, res) => {
     </body></html>`);
 });
 
-// ==================== API ДЛЯ ГЕНЕРАЦИИ НОВОГО UUID ====================
-app.post('/api/generate-uuid/:id', isAuthenticated, async (req, res) => {
-    const id = req.params.id;
-    if (!subscriptions[id]) {
-        return res.status(404).json({success: false, error: 'Subscription not found'});
-    }
-    
-    const sub = subscriptions[id];
-    const newDeviceId = uuidv4();
-    
-    // Проверяем лимит устройств
-    if (isDeviceLimitExceeded(sub)) {
-        return res.status(400).json({success: false, error: 'Device limit exceeded'});
-    }
-    
-    // Создаем новое устройство
-    if (!sub.devices) sub.devices = {};
-    sub.devices[newDeviceId] = {
-        name: 'New Device',
-        country: 'Unknown',
-        ip: req.ip,
-        userAgent: req.headers['user-agent'],
-        firstSeen: new Date().toISOString(),
-        lastSeen: new Date().toISOString(),
-        active: true,
-        config: sub.masterConfig || sub.content,
-        trafficUsed: 0
-    };
-    
-    await saveToGist();
-    res.json({success: true, uuid: newDeviceId});
-});
-
 // ==================== API И МАРШРУТЫ ====================
 app.post('/generate', isAuthenticated, (req, res) => {
     if (!isDataLoaded) return res.status(503).send('Loading...');
@@ -574,7 +521,6 @@ app.post('/edit/:id', isAuthenticated, express.json(), (req, res) => {
     if (subscriptions[id]) {
         subscriptions[id].masterConfig = addPrefix(req.body.content);
         subscriptions[id].content = addPrefix(req.body.content);
-        updateAllDevicesConfig(id);
         saveToGist();
         res.json({success: true});
     } else res.status(404).json({error: 'Not found'});
@@ -635,36 +581,13 @@ app.post('/api/extend/:id', isAuthenticated, express.json(), (req, res) => {
     }
 });
 
+// ==================== ГЕНЕРАЦИЯ QR-КОДА (БЕЗ СОЗДАНИЯ УСТРОЙСТВА) ====================
 app.get('/generate-qrcode/:id', isAuthenticated, async (req, res) => {
     if (!subscriptions[req.params.id]) return res.status(404).send('Not found');
     
-    const sub = subscriptions[req.params.id];
+    const id = req.params.id;
     const newDeviceId = uuidv4();
-    
-    // Сохраняем устройство в подписке
-    if (!sub.devices) sub.devices = {};
-    
-    // Проверяем лимит устройств
-    if (isDeviceLimitExceeded(sub)) {
-        return res.send('<h2 style="text-align:center">❌ Device limit exceeded!</h2><p style="text-align:center"><a href="/">Back</a></p>');
-    }
-    
-    // Создаем новое устройство
-    sub.devices[newDeviceId] = {
-        name: 'QR Device',
-        country: 'Unknown',
-        ip: req.ip,
-        userAgent: req.headers['user-agent'],
-        firstSeen: new Date().toISOString(),
-        lastSeen: new Date().toISOString(),
-        active: true,
-        config: sub.masterConfig || sub.content,
-        trafficUsed: 0
-    };
-    
-    await saveToGist();
-    
-    const url = `${req.protocol}://${req.get('host')}/p/${req.params.id}?deviceId=${newDeviceId}`;
+    const url = `${req.protocol}://${req.get('host')}/p/${id}?deviceId=${newDeviceId}`;
     
     try {
         const qrCode = await QRCode.toDataURL(url);
@@ -673,33 +596,35 @@ app.get('/generate-qrcode/:id', isAuthenticated, async (req, res) => {
             <html>
             <head>
                 <meta charset="UTF-8">
-                <title>QR Code</title>
+                <title>QR Code для ${id}</title>
                 <style>
                     body{font-family:Arial;text-align:center;padding:20px;background:#0d1117;color:#fff;}
                     .qr-container{background:white;display:inline-block;padding:20px;border-radius:16px;margin:20px;}
-                    button{padding:10px 20px;background:#238636;color:white;border:none;border-radius:6px;cursor:pointer;font-size:16px;}
-                    .uuid{font-size:12px;color:#8b949e;margin-top:10px;}
+                    button{padding:10px 20px;background:#238636;color:white;border:none;border-radius:6px;cursor:pointer;font-size:16px;margin:5px;}
+                    .uuid{font-size:12px;color:#8b949e;margin-top:10px;word-break:break-all;}
                 </style>
             </head>
             <body>
-                <h2>📱 QR Code для подписки</h2>
+                <h2>📱 QR-код для подключения</h2>
                 <div class="qr-container">
                     <img src="${qrCode}" style="width:250px;height:250px;">
                 </div>
                 <div>
                     <button onclick="copyLink()">📋 Скопировать ссылку</button>
+                    <button onclick="window.close()">❌ Закрыть</button>
                 </div>
                 <div class="uuid">
-                    UUID: ${newDeviceId}<br>
-                    <small>Сохраните этот UUID для подключения устройства</small>
+                    <strong>UUID для нового устройства:</strong><br>
+                    ${newDeviceId}<br>
+                    <small>Устройство будет создано ТОЛЬКО после перехода по ссылке</small>
                 </div>
                 <div style="margin-top:20px;">
-                    <a href="/" style="color:#1f6392;">← Назад</a>
+                    <a href="/" style="color:#1f6392;">← Назад в админку</a>
                 </div>
                 <script>
                     function copyLink() {
                         navigator.clipboard.writeText('${url}');
-                        alert('✅ Ссылка скопирована!');
+                        alert('✅ Ссылка скопирована! Устройство создастся при первом переходе');
                     }
                 </script>
             </body>
@@ -757,7 +682,7 @@ app.get('/export-all', isAuthenticated, (req, res) => {
     res.send('VPN BACKUP\n[ДАННЫЕ В BASE64]\n' + b64);
 });
 
-// ==================== ПОТРЕБИТЕЛЬСКАЯ ССЫЛКА (/p/:id) ====================
+// ==================== ПОТРЕБИТЕЛЬСКАЯ ССЫЛКА (/p/:id) - ЗДЕСЬ СОЗДАЕТСЯ УСТРОЙСТВО ====================
 app.get('/p/:id', async (req, res) => {
     if (!isDataLoaded) return res.status(503).send('# Server initializing...');
     const id = req.params.id;
@@ -765,7 +690,12 @@ app.get('/p/:id', async (req, res) => {
     
     const sub = subscriptions[id];
     let deviceId = req.query.deviceId;
-    if (!deviceId) { deviceId = uuidv4(); return res.redirect('/p/' + id + '?deviceId=' + deviceId); }
+    
+    // Если нет deviceId - создаем новый и редиректим
+    if (!deviceId) {
+        deviceId = uuidv4();
+        return res.redirect(`/p/${id}?deviceId=${deviceId}`);
+    }
     
     sub.count = (sub.count || 0) + 1;
     const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.connection?.remoteAddress || '0.0.0.0';
@@ -773,23 +703,29 @@ app.get('/p/:id', async (req, res) => {
     
     if (!sub.devices) sub.devices = {};
     
+    // ТОЛЬКО ЗДЕСЬ создается новое устройство! (при первом переходе по ссылке)
     if (!sub.devices[deviceId]) {
         if (isDeviceLimitExceeded(sub)) {
             res.setHeader('Content-Type', 'text/plain');
             return res.send(DESTROY_CONFIG); 
         }
         sub.devices[deviceId] = {
-            name: country, country, ip,
+            name: country,
+            country: country,
+            ip: ip,
             userAgent: req.headers['user-agent'],
-            firstSeen: new Date().toISOString(), lastSeen: new Date().toISOString(),
-            active: true, config: sub.masterConfig || sub.content, trafficUsed: 0
+            firstSeen: new Date().toISOString(),
+            lastSeen: new Date().toISOString(),
+            active: true,
+            config: sub.masterConfig || sub.content,
+            trafficUsed: 0
         };
+        console.log(`✅ Новое устройство ${deviceId} создано для подписки ${id}`);
     } else {
         const device = sub.devices[deviceId];
         device.lastSeen = new Date().toISOString();
         device.ip = ip;
         if (device.country !== country) device.country = country;
-        if (device.active && !sub.isDestroyed && device.config !== sub.masterConfig) device.config = sub.masterConfig;
         device.trafficUsed = (device.trafficUsed || 0) + Buffer.byteLength(device.config, 'utf8');
     }
     
