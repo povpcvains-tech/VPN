@@ -325,7 +325,7 @@ app.post('/api/change-password', isAuthenticated, express.json(), (req, res) => 
     res.json({success: true});
 });
 
-// ==================== ГЛАВНЫЙ ДАШБОРД (ИСПРАВЛЕННЫЕ КНОПКИ) ====================
+// ==================== ГЛАВНЫЙ ДАШБОРД ====================
 app.get('/', isAuthenticated, (req, res) => {
     if (!isDataLoaded) return res.send('<h1 style="color:white;text-align:center;padding:50px;">⏳ Loading data... Please refresh in 5 seconds.</h1><script>setTimeout(()=>location.reload(), 5000);</script>');
     
@@ -580,6 +580,7 @@ app.get('/generate-qrcode/:id', isAuthenticated, async (req, res) => {
     } else res.status(404).send('Not found');
 });
 
+// ==================== АДМИН ПАНЕЛЬ (ИСПРАВЛЕНА) ====================
 app.get('/admin/users', isAuthenticated, isAdmin, (req, res) => {
     let usersHtml = '';
     for (const [username, user] of Object.entries(users)) {
@@ -588,19 +589,25 @@ app.get('/admin/users', isAuthenticated, isAdmin, (req, res) => {
             '<strong>👤 ' + username + '</strong> (' + user.role + ')<br>Links: ' + linksCount + ' | Blocked: ' + user.blocked +
             '<div style="margin-top:5px;">' +
             (user.blocked 
-                ? '<button onclick="unblock(\\''+username+'\\')" style="background:#238636;color:white;border:none;padding:5px;">Unblock</button>'
-                : '<button onclick="block(\\''+username+'\\')" style="background:#d32f2f;color:white;border:none;padding:5px;">Block</button>') +
-            ' <button onclick="delUser(\\''+username+'\\')" style="background:#d32f2f;color:white;border:none;padding:5px;">Delete</button>' +
+                ? '<button onclick="unblock(\'' + username + '\')" style="background:#238636;color:white;border:none;padding:5px;">Unblock</button>'
+                : '<button onclick="block(\'' + username + '\')" style="background:#d32f2f;color:white;border:none;padding:5px;">Block</button>') +
+            ' <button onclick="delUser(\'' + username + '\')" style="background:#d32f2f;color:white;border:none;padding:5px;">Delete</button>' +
             '</div></div>';
     }
-    res.send(`<!DOCTYPE html><html><body style="background:#0d1117;color:white;padding:20px;">
-    <h1>👥 User Management</h1><a href="/"><button style="background:#6e7681;color:white;border:none;padding:10px;">Back</button></a>
+    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>User Management</title>
+    <style>body{background:#0d1117;color:white;padding:20px;font-family:Arial;}
+    button{padding:5px 10px;margin:2px;border-radius:4px;border:none;cursor:pointer;}
+    a button{background:#6e7681;color:white;padding:10px;}</style>
+    <body>
+    <h1>👥 User Management</h1>
+    <a href="/"><button>Back</button></a>
     ${usersHtml}
     <script>
         function block(u){fetch('/api/block-user',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u})}).then(()=>location.reload());}
         function unblock(u){fetch('/api/unblock-user',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u})}).then(()=>location.reload());}
         function delUser(u){if(confirm('Delete '+u+'?')){fetch('/api/delete-user',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u})}).then(()=>location.reload());}}
-    </script></body></html>`);
+    </script>
+    </body></html>`);
 });
 
 app.post('/api/block-user', isAuthenticated, isAdmin, express.json(), (req, res) => { if(users[req.body.username]) { users[req.body.username].blocked=true; saveUsers(); } res.json({success:true}); });
