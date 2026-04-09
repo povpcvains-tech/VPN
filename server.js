@@ -325,7 +325,7 @@ app.post('/api/change-password', isAuthenticated, express.json(), (req, res) => 
     res.json({success: true});
 });
 
-// ==================== ГЛАВНЫЙ ДАШБОРД ====================
+// ==================== ГЛАВНЫЙ ДАШБОРД (С АВТО-ГЕНЕРАЦИЕЙ UUID ПРИ КОПИРОВАНИИ) ====================
 app.get('/', isAuthenticated, (req, res) => {
     if (!isDataLoaded) return res.send('<h1 style="color:white;text-align:center;padding:50px;">⏳ Loading data... Please refresh in 5 seconds.</h1><script>setTimeout(()=>location.reload(), 5000);</script>');
     
@@ -352,7 +352,8 @@ app.get('/', isAuthenticated, (req, res) => {
             '</div>' +
             '<div>' +
             '<button onclick="extendSubscription(\'' + id + '\')" style="background:#238636;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;font-weight:bold;">💰 Продлить</button> ' +
-            '<button onclick="copyLink(\'' + id + '\')" style="background:#1f6392;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">📋 Копировать</button> ' +
+            '<button onclick="copyLinkWithUUID(\'' + id + '\')" style="background:#1f6392;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">📋 Копировать (с UUID)</button> ' +
+            '<button onclick="copySimpleLink(\'' + id + '\')" style="background:#6e7681;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">🔗 Только ссылку</button> ' +
             '<button onclick="showQR(\'' + id + '\')" style="background:#ff9800;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">📱 QR</button> ' +
             '<button onclick="showDevices(\'' + id + '\')" style="background:#6f42c1;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">👁 Устройства</button> ' +
             '<button onclick="editSub(\'' + id + '\')" style="background:#1f6392;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">✏️ Изм.</button> ' +
@@ -369,7 +370,9 @@ app.get('/', isAuthenticated, (req, res) => {
     input,textarea,select{padding:10px;width:100%;background:#0d1117;color:#fff;border:1px solid #333;border-radius:6px;margin:5px 0;box-sizing:border-box;}
     .modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:1000;}
     .modal-content{background:#161b22;margin:5% auto;padding:20px;width:90%;max-width:500px;border-radius:12px;max-height:80vh;overflow-y:auto;}
-    .close{color:#fff;float:right;font-size:24px;cursor:pointer;}</style></head>
+    .close{color:#fff;float:right;font-size:24px;cursor:pointer;}
+    .toast{position:fixed;bottom:20px;right:20px;background:#238636;color:white;padding:12px 24px;border-radius:8px;z-index:2000;animation:fadeOut 2s forwards;}
+    @keyframes fadeOut{0%{opacity:1;}70%{opacity:1;}100%{opacity:0;visibility:hidden;}}</style></head>
     <body>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
             <h2 style="margin:0;">👤 ${req.session.userId}</h2>
@@ -404,17 +407,45 @@ app.get('/', isAuthenticated, (req, res) => {
         <div id="mainModal" class="modal"><div class="modal-content"><span class="close" onclick="document.getElementById('mainModal').style.display='none'">&times;</span><div id="modalBody"></div></div></div>
         
         <script>
-            function copyLink(id) {
-                navigator.clipboard.writeText(window.location.origin + '/p/' + id).then(() => alert('✅ Copied!'));
+            function showToast(msg) {
+                const toast = document.createElement('div');
+                toast.className = 'toast';
+                toast.innerText = msg;
+                document.body.appendChild(toast);
+                setTimeout(() => toast.remove(), 2000);
             }
+            
+            async function copyLinkWithUUID(id) {
+                try {
+                    const response = await fetch('/api/generate-uuid/' + id, {method: 'POST'});
+                    const data = await response.json();
+                    if(data.success) {
+                        const url = window.location.origin + '/p/' + id + '?deviceId=' + data.uuid;
+                        await navigator.clipboard.writeText(url);
+                        showToast('✅ Скопировано с UUID: ' + data.uuid.substring(0, 8) + '...');
+                    } else {
+                        showToast('❌ Ошибка: ' + data.error);
+                    }
+                } catch(e) {
+                    showToast('❌ Ошибка при генерации UUID');
+                }
+            }
+            
+            function copySimpleLink(id) {
+                navigator.clipboard.writeText(window.location.origin + '/p/' + id);
+                showToast('✅ Скопирована ссылка без UUID');
+            }
+            
             function deleteSub(id) {
                 if(confirm('Delete ' + id + '?')) {
                     fetch('/delete/' + id, {method:'POST'}).then(() => location.reload());
                 }
             }
+            
             function showQR(id) {
                 window.open('/generate-qrcode/' + id, '_blank', 'width=400,height=500');
             }
+            
             function editSub(id) {
                 const newConf = prompt('Enter new config:');
                 if(newConf) {
@@ -422,6 +453,7 @@ app.get('/', isAuthenticated, (req, res) => {
                     .then(() => location.reload());
                 }
             }
+            
             function showDevices(id) {
                 fetch('/devices/' + id).then(r => r.json()).then(devs => {
                     let html = '<h3>📱 Devices for ' + id + '</h3>';
@@ -439,6 +471,7 @@ app.get('/', isAuthenticated, (req, res) => {
                     document.getElementById('mainModal').style.display = 'block';
                 });
             }
+            
             function killDev(id, uuid) { fetch('/deactivate-device/' + id + '/' + uuid, {method:'POST'}).then(() => showDevices(id)); }
             function restoreDev(id, uuid) { fetch('/restore-device/' + id + '/' + uuid, {method:'POST'}).then(() => showDevices(id)); }
             
@@ -473,6 +506,39 @@ app.get('/', isAuthenticated, (req, res) => {
             }
         </script>
     </body></html>`);
+});
+
+// ==================== API ДЛЯ ГЕНЕРАЦИИ НОВОГО UUID ====================
+app.post('/api/generate-uuid/:id', isAuthenticated, async (req, res) => {
+    const id = req.params.id;
+    if (!subscriptions[id]) {
+        return res.status(404).json({success: false, error: 'Subscription not found'});
+    }
+    
+    const sub = subscriptions[id];
+    const newDeviceId = uuidv4();
+    
+    // Проверяем лимит устройств
+    if (isDeviceLimitExceeded(sub)) {
+        return res.status(400).json({success: false, error: 'Device limit exceeded'});
+    }
+    
+    // Создаем новое устройство
+    if (!sub.devices) sub.devices = {};
+    sub.devices[newDeviceId] = {
+        name: 'New Device',
+        country: 'Unknown',
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+        firstSeen: new Date().toISOString(),
+        lastSeen: new Date().toISOString(),
+        active: true,
+        config: sub.masterConfig || sub.content,
+        trafficUsed: 0
+    };
+    
+    await saveToGist();
+    res.json({success: true, uuid: newDeviceId});
 });
 
 // ==================== API И МАРШРУТЫ ====================
@@ -570,17 +636,81 @@ app.post('/api/extend/:id', isAuthenticated, express.json(), (req, res) => {
 });
 
 app.get('/generate-qrcode/:id', isAuthenticated, async (req, res) => {
-    if (subscriptions[req.params.id]) {
-        const newDeviceId = uuidv4();
-        const url = `${req.protocol}://${req.get('host')}/p/${req.params.id}?deviceId=${newDeviceId}`;
-        try {
-            const qrCode = await QRCode.toDataURL(url);
-            res.send(`<h2 style="text-align:center">QR Code</h2><div style="text-align:center"><img src="${qrCode}" style="background:white;padding:10px;border-radius:8px;"></div><p style="text-align:center;font-size:12px">UUID: ${newDeviceId}</p>`);
-        } catch (e) { res.status(500).send('Error'); }
-    } else res.status(404).send('Not found');
+    if (!subscriptions[req.params.id]) return res.status(404).send('Not found');
+    
+    const sub = subscriptions[req.params.id];
+    const newDeviceId = uuidv4();
+    
+    // Сохраняем устройство в подписке
+    if (!sub.devices) sub.devices = {};
+    
+    // Проверяем лимит устройств
+    if (isDeviceLimitExceeded(sub)) {
+        return res.send('<h2 style="text-align:center">❌ Device limit exceeded!</h2><p style="text-align:center"><a href="/">Back</a></p>');
+    }
+    
+    // Создаем новое устройство
+    sub.devices[newDeviceId] = {
+        name: 'QR Device',
+        country: 'Unknown',
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+        firstSeen: new Date().toISOString(),
+        lastSeen: new Date().toISOString(),
+        active: true,
+        config: sub.masterConfig || sub.content,
+        trafficUsed: 0
+    };
+    
+    await saveToGist();
+    
+    const url = `${req.protocol}://${req.get('host')}/p/${req.params.id}?deviceId=${newDeviceId}`;
+    
+    try {
+        const qrCode = await QRCode.toDataURL(url);
+        res.send(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <title>QR Code</title>
+                <style>
+                    body{font-family:Arial;text-align:center;padding:20px;background:#0d1117;color:#fff;}
+                    .qr-container{background:white;display:inline-block;padding:20px;border-radius:16px;margin:20px;}
+                    button{padding:10px 20px;background:#238636;color:white;border:none;border-radius:6px;cursor:pointer;font-size:16px;}
+                    .uuid{font-size:12px;color:#8b949e;margin-top:10px;}
+                </style>
+            </head>
+            <body>
+                <h2>📱 QR Code для подписки</h2>
+                <div class="qr-container">
+                    <img src="${qrCode}" style="width:250px;height:250px;">
+                </div>
+                <div>
+                    <button onclick="copyLink()">📋 Скопировать ссылку</button>
+                </div>
+                <div class="uuid">
+                    UUID: ${newDeviceId}<br>
+                    <small>Сохраните этот UUID для подключения устройства</small>
+                </div>
+                <div style="margin-top:20px;">
+                    <a href="/" style="color:#1f6392;">← Назад</a>
+                </div>
+                <script>
+                    function copyLink() {
+                        navigator.clipboard.writeText('${url}');
+                        alert('✅ Ссылка скопирована!');
+                    }
+                </script>
+            </body>
+            </html>
+        `);
+    } catch (e) { 
+        res.status(500).send('Error generating QR code'); 
+    }
 });
 
-// ==================== АДМИН ПАНЕЛЬ (ИСПРАВЛЕНА) ====================
+// ==================== АДМИН ПАНЕЛЬ ====================
 app.get('/admin/users', isAuthenticated, isAdmin, (req, res) => {
     let usersHtml = '';
     for (const [username, user] of Object.entries(users)) {
