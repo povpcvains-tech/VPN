@@ -11,7 +11,6 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ==================== КОНФИГУРАЦИЯ ====================
-// Для Render/Heroku/VPS используйте переменные окружения
 const GIST_ID = process.env.GIST_ID || 'fe2b9abda4ee7cf16314d8422c97f933';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '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';
 
@@ -42,7 +41,7 @@ function loadUsers() {
                     blocked: false,
                     frozen: false,
                     linksCreated: 0,
-                    hasPremium: true // Админу доступны все функции
+                    hasPremium: true
                 },
                 'base64': {
                     username: 'base64',
@@ -58,7 +57,6 @@ function loadUsers() {
             fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
         }
         
-        // Миграция полей
         let migrated = false;
         for (const username in users) {
             if (!users[username].role) { users[username].role = 'user'; migrated = true; }
@@ -71,10 +69,7 @@ function loadUsers() {
             }
         }
         if (migrated) saveUsers();
-        
-    } catch (error) {
-        console.error('Ошибка загрузки пользователей:', error);
-    }
+    } catch (error) { console.error('Ошибка загрузки пользователей:', error); }
 }
 
 function saveUsers() {
@@ -83,9 +78,7 @@ function saveUsers() {
 }
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
-function generateRandomId() {
-    return Math.random().toString(36).substring(2, 8);
-}
+function generateRandomId() { return Math.random().toString(36).substring(2, 8); }
 
 function addPrefix(content) {
     if (!content.startsWith(PROFILE_PREFIX)) return PROFILE_PREFIX + content;
@@ -103,7 +96,6 @@ function replaceAddressInConfig(config, newAddress) {
 
 async function getCountryFromIP(ip) {
     try {
-        // Используем ip-api.com (бесплатно до 45 запросов в минуту)
         const response = await axios.get(`http://ip-api.com/json/${ip}`);
         if (response.data.status === 'success') return response.data.country;
     } catch (error) { console.error('Ошибка IP:', error.message); }
@@ -165,12 +157,10 @@ function updateAllDevicesConfig(subId) {
     }
 }
 
-// Проверка подписок каждые 5 минут
 function checkSubscriptions() {
     for (const [id, sub] of Object.entries(subscriptions)) {
         if (!sub.isDestroyed && (isSubscriptionExpired(sub) || isTrafficLimitExceeded(sub))) {
             console.log(`🔥 Подписка ${id} истекла/лимит превышен -> Destroy`);
-            // Сохраняем оригинал перед уничтожением, если еще не сохранен
             if (!sub.originalContent) sub.originalContent = sub.masterConfig;
             applyDestroyConfig(sub);
         }
@@ -213,13 +203,12 @@ async function loadFromGist() {
             const content = gist.files?.['DataBAse.json']?.content;
             if (content) {
                 subscriptions = JSON.parse(content);
-                // Миграция данных
                 for (const [id, data] of Object.entries(subscriptions)) {
                     if (!data.masterConfig && data.content) data.masterConfig = data.content;
                     if (!data.devices) data.devices = {};
                     if (!data.name) data.name = `Sub #${id}`;
                     if (!data.trafficLimit) data.trafficLimit = 0;
-                    if (!data.maxDevices) data.maxDevices = 0; // 0 = безлимит
+                    if (!data.maxDevices) data.maxDevices = 0;
                     if (!data.owner) data.owner = 'admin';
                 }
                 console.log(`✅ Loaded ${Object.keys(subscriptions).length} subs`);
@@ -242,7 +231,7 @@ async function loadFromGist() {
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(session({
-    secret: 'vpn-secret-key-v1.7',
+    secret: 'vpn-secret-key-v1.7-fix',
     resave: false,
     saveUninitialized: false,
     cookie: { maxAge: 24 * 60 * 60 * 1000, httpOnly: true }
@@ -489,7 +478,6 @@ app.get('/', isAuthenticated, (req, res) => {
     
     let linksHtml = '';
     const allLinks = Object.entries(subscriptions);
-    // Фильтрация: админ видит всё, юзер только своё
     const visibleLinks = isSuperAdmin ? allLinks : allLinks.filter(([_, s]) => s.owner === req.session.userId);
     
     for (const [id, data] of visibleLinks) {
@@ -497,7 +485,6 @@ app.get('/', isAuthenticated, (req, res) => {
         const displayContent = shortContent + (removePrefix(data.masterConfig || data.content || '').length > 50 ? '...' : '');
         const devicesCount = data.devices ? Object.keys(data.devices).length : 0;
         
-        // Статус
         let statusBadge = '';
         if (data.isDestroyed) statusBadge = '<span style="color:#d32f2f;font-weight:bold;">💀 DESTROYED</span>';
         else if (isSubscriptionExpired(data)) statusBadge = '<span style="color:#d32f2f;">⏰ EXPIRED</span>';
@@ -507,7 +494,6 @@ app.get('/', isAuthenticated, (req, res) => {
             statusBadge = `<span style="color:#238636;">⏳ ${daysLeft} days left</span>`;
         }
         
-        // Лимит устройств
         const deviceLimitText = data.maxDevices > 0 ? `${devicesCount}/${data.maxDevices}` : `${devicesCount}/∞`;
         const isDeviceLimitReached = data.maxDevices > 0 && devicesCount >= data.maxDevices;
         
@@ -529,12 +515,10 @@ app.get('/', isAuthenticated, (req, res) => {
                     <button onclick="copyWithNewDevice('${id}')" style="background:#1f6392;">📋 Copy (New Dev)</button>
                     <button onclick="window.open('/generate-qrcode/${id}','_blank','width=400,height=500')" style="background:#ff9800;">📱 QR</button>
                     
-                    <!-- Кнопка Изменить скрыта, если уничтожено -->
                     ${!data.isDestroyed ? `<button onclick="editLink('${id}')" style="background:#1f6392;">✏️ Edit</button>` : ''}
                     
                     <button onclick="showDevices('${id}')" style="background:#6f42c1;">📱 Devices</button>
                     
-                    <!-- Кнопка Продлить видна ВСЕГДА, даже если уничтожено (для восстановления) -->
                     <button onclick="extendSubscription('${id}')" style="background:#238636;">💰 Extend/Renew</button>
                     
                     ${data.originalContent ? `<form action="/restore/${id}" method="POST" style="display:inline;" onsubmit="event.preventDefault();this.submit();"><button type="submit" style="background:#238636;">🔄 Restore Config</button></form>` : ''}
@@ -544,6 +528,9 @@ app.get('/', isAuthenticated, (req, res) => {
         `;
     }
     
+    // Исправленная часть с кнопкой админа
+    const adminButton = isSuperAdmin ? `<a href="/admin/users"><button class="admin-link">👥 Users</button></a>` : '';
+
     res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>VPN Admin v1.7</title>
     <style>body{font-family:Arial;padding:20px;background:#0d1117;color:#fff;}
     .card{background:#161b22;padding:20px;border-radius:12px;margin-bottom:20px;}
@@ -595,7 +582,7 @@ app.get('/', isAuthenticated, (req, res) => {
                     <strong>\${escapeHtml(device.name)}</strong><br>IP: \${escapeHtml(device.ip)}<br>
                     📊 Traffic: \${(device.trafficUsed/1024/1024).toFixed(2)} MB<br>
                     Status: \${device.active?'✅ Active':'❌ Inactive'}<br>
-                    \${device.active?\<button onclick="deactivateDevice('\${id}','\${uuid}')" style="background:#d32f2f;margin-top:5px;">➖ Deactivate</button>\`:\<button onclick="restoreDevice('\${id}','\${uuid}')" style="background:#238636;margin-top:5px;">🔄 Restore</button>\`}
+                    \${device.active?\`<button onclick="deactivateDevice('\${id}','\${uuid}')" style="background:#d32f2f;margin-top:5px;">➖ Deactivate</button>\`:\`<button onclick="restoreDevice('\${id}','\${uuid}')" style="background:#238636;margin-top:5px;">🔄 Restore</button>\`}
                     </div>\`;
                 }}
                 html+='<br><button onclick="closeModal()">Close</button>';showModal(html);
@@ -611,7 +598,7 @@ app.get('/', isAuthenticated, (req, res) => {
         <div style="overflow:hidden;margin-bottom:20px;">
             <span style="font-size:18px;">👤 ${req.session.userId} ${isSuperAdmin?'⭐':''}</span>
             <a href="/change-password"><button style="background:#8b4513;float:right;margin-right:10px;">🔑 Pass</button></a>
-            ${isSuperAdmin?\<a href="/admin/users"><button class="admin-link">👥 Users</button></a>\`:''}
+            ${adminButton}
             <a href="/logout"><button class="logout">🚪 Logout</button></a>
             <a href="/export-all"><button class="export">💾 Export All</button></a>
         </div>
@@ -685,7 +672,6 @@ app.post('/generate', isAuthenticated, (req, res) => {
 app.post('/edit/:id', isAuthenticated, express.json(), (req, res) => {
     const id = req.params.id;
     if (subscriptions[id] && (subscriptions[id].owner === req.session.userId || users[req.session.userId]?.role !== 'user')) {
-        // Не даем редактировать, если уничтожено (опционально, но логично)
         if (subscriptions[id].isDestroyed) return res.status(400).json({error: 'Cannot edit destroyed sub'});
         
         subscriptions[id].masterConfig = addPrefix(req.body.content);
@@ -727,7 +713,6 @@ app.post('/restore-device/:linkId/:deviceId', isAuthenticated, (req, res) => {
     } else { res.status(404).json({error: 'Not found'}); }
 });
 
-// API Продления (теперь обновляет и лимиты устройств/трафика)
 app.post('/api/extend/:id', isAuthenticated, express.json(), (req, res) => {
     const { id } = req.params;
     const { duration, unit, maxDevices, trafficLimit } = req.body;
@@ -737,7 +722,6 @@ app.post('/api/extend/:id', isAuthenticated, express.json(), (req, res) => {
         if (maxDevices !== undefined) subscriptions[id].maxDevices = parseInt(maxDevices);
         if (trafficLimit !== undefined) subscriptions[id].trafficLimit = parseInt(trafficLimit) > 0 ? parseInt(trafficLimit) * 1024 * 1024 : 0;
         
-        // Если была уничтожена - восстанавливаем
         if (subscriptions[id].isDestroyed && subscriptions[id].originalContent) {
             subscriptions[id].masterConfig = subscriptions[id].originalContent;
             subscriptions[id].content = subscriptions[id].originalContent;
@@ -755,7 +739,6 @@ app.post('/api/extend/:id', isAuthenticated, express.json(), (req, res) => {
     } else { res.status(404).json({error: 'Not found'}); }
 });
 
-// 🔥 ГЛАВНЫЙ ОБРАБОТЧИК ПОДПИСКИ С ЛИМИТОМ УСТРОЙСТВ
 app.get('/p/:id', async (req, res) => {
     const id = req.params.id;
     if (!subscriptions[id]) return res.status(404).send('Link not found');
@@ -775,11 +758,9 @@ app.get('/p/:id', async (req, res) => {
     
     if (!sub.devices) sub.devices = {};
     
-    // Проверяем лимит устройств ТОЛЬКО если это новое устройство
     if (!sub.devices[deviceId]) {
         if (isDeviceLimitExceeded(sub)) {
             console.log(`🚫 Device limit exceeded for ${id}. IP: ${ip}`);
-            // Отдаем destroy config, так как лимит исчерпан
             res.setHeader('Content-Type', 'text/plain; charset=utf-8');
             res.setHeader('Cache-Control', 'no-cache');
             return res.send(DESTROY_CONFIG);
@@ -801,16 +782,13 @@ app.get('/p/:id', async (req, res) => {
         device.lastSeen = new Date().toISOString();
         device.ip = ip;
         if (device.country !== country) device.country = country;
-        // Обновляем конфиг если активен и не уничтожен
         if (device.active && !sub.isDestroyed && device.config !== sub.masterConfig) {
             device.config = sub.masterConfig;
         }
-        // Учет трафика (размер ответа)
         const configSize = Buffer.byteLength(device.config, 'utf8');
         device.trafficUsed = (device.trafficUsed || 0) + configSize;
     }
     
-    // Проверка глобальных лимитов
     if (!sub.isDestroyed && (isSubscriptionExpired(sub) || isTrafficLimitExceeded(sub))) {
         console.log(`🔥 Sub ${id} expired/limit reached -> Destroy`);
         if (!sub.originalContent) sub.originalContent = sub.masterConfig;
