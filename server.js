@@ -7,18 +7,16 @@ const QRCode = require('qrcode');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ==================== КОНФИГУРАЦИЯ ====================
-const GIST_ID = process.env.GIST_ID || 'fe2b9abda4ee7cf16314d8422c97f933';
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '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';
+const GIST_ID = 'fe2b9abda4ee7cf16314d8422c97f933';
+const GITHUB_TOKEN = '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';
 
 // ==================== ПЕРЕМЕННЫЕ ====================
 let subscriptions = {};
 let users = {};
-let isDataLoaded = false;
 const BACKUP_FILE = './backup.json';
 const USERS_FILE = './users.json';
 const PROFILE_PREFIX = '# profile-update-interval: 1\n';
@@ -33,148 +31,152 @@ function loadUsers() {
             users = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
         } else {
             const hashedPassword = bcrypt.hashSync('123', 10);
-            const hashedBase64 = bcrypt.hashSync('5382197', 10);
             users = {
-                'admin': { username: 'admin', password: hashedPassword, createdAt: new Date().toISOString(), role: 'admin', blocked: false, frozen: false, linksCreated: 0, hasPremium: true },
-                'base64': { username: 'base64', password: hashedBase64, createdAt: new Date().toISOString(), role: 'superadmin', blocked: false, frozen: false, linksCreated: 0, hasPremium: true }
+                'admin': {
+                    username: 'admin',
+                    password: hashedPassword,
+                    createdAt: new Date().toISOString()
+                }
             };
             fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
         }
-        let migrated = false;
-        for (const username in users) {
-            if (!users[username].role) { users[username].role = 'user'; migrated = true; }
-            if (users[username].blocked === undefined) { 
-                users[username].blocked = false; users[username].frozen = false; 
-                users[username].linksCreated = 0; users[username].hasPremium = false;
-                migrated = true; 
-            }
-        }
-        if (migrated) saveUsers();
-    } catch (error) { console.error('❌ Error loading users:', error.message); }
+    } catch (error) {
+        console.error('Ошибка загрузки пользователей:', error);
+    }
 }
 
 function saveUsers() {
-    try { fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2)); } 
-    catch (error) { console.error('❌ Error saving users:', error.message); }
+    try {
+        fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+    } catch (error) {
+        console.error('Ошибка сохранения пользователей:', error);
+    }
 }
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
-function generateRandomId() { return Math.random().toString(36).substring(2, 8); }
-function addPrefix(content) { return content.startsWith(PROFILE_PREFIX) ? content : PROFILE_PREFIX + content; }
-function removePrefix(content) { return content.startsWith(PROFILE_PREFIX) ? content.substring(PROFILE_PREFIX.length) : content; }
+function generateRandomId() {
+    return Math.random().toString(36).substring(2, 8);
+}
+
+function addPrefix(content) {
+    if (!content.startsWith(PROFILE_PREFIX)) {
+        return PROFILE_PREFIX + content;
+    }
+    return content;
+}
+
+function removePrefix(content) {
+    if (content.startsWith(PROFILE_PREFIX)) {
+        return content.substring(PROFILE_PREFIX.length);
+    }
+    return content;
+}
+
+function replaceAddressInConfig(config, newAddress) {
+    return config.replace(/@[\d\.]+:\d+/, `@${newAddress}`);
+}
 
 async function getCountryFromIP(ip) {
     try {
-        const response = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 3000 });
-        if (response.data.status === 'success') return response.data.country;
-    } catch (error) { /* ignore */ }
-    return 'Unknown';
-}
-
-function calculateExpiryDate(duration, unit) {
-    const now = new Date();
-    switch(unit) {
-        case 'minutes': return new Date(now.getTime() + duration * 60 * 1000);
-        case 'hours': return new Date(now.getTime() + duration * 60 * 60 * 1000);
-        case 'days': return new Date(now.getTime() + duration * 24 * 60 * 60 * 1000);
-        case 'months': return new Date(now.getFullYear(), now.getMonth() + duration, now.getDate());
-        default: return new Date(now.getTime() + duration * 24 * 60 * 60 * 1000);
-    }
-}
-
-function isSubscriptionExpired(sub) { return sub.expiryDate && new Date() > new Date(sub.expiryDate); }
-
-function isTrafficLimitExceeded(sub) {
-    if (!sub.trafficLimit || sub.trafficLimit <= 0) return false;
-    let total = 0;
-    if (sub.devices) for (const d of Object.values(sub.devices)) total += (d.trafficUsed || 0);
-    return total >= sub.trafficLimit;
-}
-
-function isDeviceLimitExceeded(sub) {
-    if (!sub.maxDevices || sub.maxDevices <= 0) return false;
-    return (sub.devices ? Object.keys(sub.devices).length : 0) >= sub.maxDevices;
-}
-
-function applyDestroyConfig(sub) {
-    sub.masterConfig = addPrefix(DESTROY_CONFIG);
-    sub.content = addPrefix(DESTROY_CONFIG);
-    sub.isDestroyed = true;
-    if (sub.devices) {
-        for (const deviceId in sub.devices) {
-            sub.devices[deviceId].active = false;
-            sub.devices[deviceId].config = DESTROY_CONFIG;
+        const response = await axios.get(`http://ip-api.com/json/${ip}`);
+        if (response.data.status === 'success') {
+            return response.data.country;
         }
+    } catch (error) {
+        console.error('Ошибка определения страны:', error);
     }
+    return 'Неизвестно';
 }
 
-function checkSubscriptions() {
-    let changed = false;
-    for (const [id, sub] of Object.entries(subscriptions)) {
-        if (!sub.isDestroyed && (isSubscriptionExpired(sub) || isTrafficLimitExceeded(sub))) {
-            console.log(`🔥 Sub ${id} expired/limit -> Destroy`);
-            if (!sub.originalContent) sub.originalContent = sub.masterConfig;
-            applyDestroyConfig(sub);
-            changed = true;
-        }
-    }
-    if (changed) saveToGist();
-}
-setInterval(checkSubscriptions, 5 * 60 * 1000);
-
-// ==================== GIST OPERATIONS ====================
+// ==================== РАБОТА С GIST ====================
 async function saveToGist() {
-    if (!isDataLoaded) return;
-    console.log('💾 Saving to Gist...');
+    console.log('💾 Сохраняю в Gist...');
+    
     try {
         const response = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
             method: 'PATCH',
-            headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ files: { 'DataBAse.json': { content: JSON.stringify(subscriptions, null, 2) } } })
+            headers: {
+                'Authorization': `token ${GITHUB_TOKEN}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                files: {
+                    'DataBAse.json': {
+                        content: JSON.stringify(subscriptions, null, 2)
+                    }
+                }
+            })
         });
-        if (!response.ok) throw new Error(`API ${response.status}`);
+        
+        if (response.ok) {
+            console.log('✅ Данные сохранены в Gist');
+        } else {
+            const errorText = await response.text();
+            console.log('❌ Ошибка API:', response.status, errorText);
+            fs.writeFileSync(BACKUP_FILE, JSON.stringify(subscriptions, null, 2));
+            console.log('📁 Сохранено в локальный бэкап');
+        }
     } catch (error) {
-        console.error('❌ Gist Save Error:', error.message);
+        console.error('❌ Ошибка сохранения:', error.message);
         fs.writeFileSync(BACKUP_FILE, JSON.stringify(subscriptions, null, 2));
+        console.log('📁 Сохранено в локальный бэкап');
     }
 }
 
 async function loadFromGist() {
-    console.log('📥 Loading from Gist...');
+    console.log('📥 Загружаю из Gist...');
+    
     try {
         const response = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
-            headers: { 'Authorization': `token ${GITHUB_TOKEN}` }
+            headers: {
+                'Authorization': `token ${GITHUB_TOKEN}`
+            }
         });
+        
         if (response.ok) {
             const gist = await response.json();
             const content = gist.files?.['DataBAse.json']?.content;
+            
             if (content) {
                 subscriptions = JSON.parse(content);
+                const count = Object.keys(subscriptions).length;
+                console.log(`✅ Загружено ${count} ссылок из Gist`);
+                
+                // Миграция старых данных
                 for (const [id, data] of Object.entries(subscriptions)) {
-                    if (!data.masterConfig && data.content) data.masterConfig = data.content;
-                    if (!data.devices) data.devices = {};
-                    if (!data.name) data.name = `Sub #${id}`;
-                    if (!data.trafficLimit) data.trafficLimit = 0;
-                    if (!data.maxDevices) data.maxDevices = 0;
-                    if (!data.owner) data.owner = 'admin';
+                    if (!data.masterConfig && data.content) {
+                        data.masterConfig = data.content;
+                    }
+                    if (!data.devices) {
+                        data.devices = {};
+                    }
                 }
-                console.log(`✅ Loaded ${Object.keys(subscriptions).length} subs`);
-                isDataLoaded = true;
+                
+                return true;
+            } else {
+                console.log('⚠️ Файл DataBAse.json пуст');
+                return false;
+            }
+        } else {
+            console.log('❌ Ошибка загрузки:', response.status);
+            
+            if (fs.existsSync(BACKUP_FILE)) {
+                const backupData = fs.readFileSync(BACKUP_FILE, 'utf8');
+                subscriptions = JSON.parse(backupData);
+                console.log(`📁 Загружено из локального бэкапа`);
                 return true;
             }
+            return false;
         }
-        throw new Error('No content');
     } catch (error) {
-        console.error('❌ Gist Load Error:', error.message);
+        console.error('❌ Ошибка загрузки из Gist:', error.message);
+        
         if (fs.existsSync(BACKUP_FILE)) {
-            try {
-                subscriptions = JSON.parse(fs.readFileSync(BACKUP_FILE, 'utf8'));
-                isDataLoaded = true;
-                console.log('📁 Loaded from backup');
-                return true;
-            } catch (e) { console.error('❌ Backup error'); }
+            const backupData = fs.readFileSync(BACKUP_FILE, 'utf8');
+            subscriptions = JSON.parse(backupData);
+            console.log(`📁 Загружено из локального бэкапа`);
+            return true;
         }
-        isDataLoaded = true; 
         return false;
     }
 }
@@ -182,337 +184,445 @@ async function loadFromGist() {
 // ==================== MIDDLEWARE ====================
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+app.use(express.static('public'));
 app.use(session({
-    secret: 'vpn-secret-v1.9-fixed',
+    secret: 'vpn-secret-key-2024',
     resave: false,
     saveUninitialized: false,
-    cookie: { maxAge: 24 * 60 * 60 * 1000, httpOnly: true }
+    cookie: { maxAge: 24 * 60 * 60 * 1000 }
 }));
 
-app.get('/health', (req, res) => res.json({ status: 'ok', loaded: isDataLoaded }));
-
 function isAuthenticated(req, res, next) {
-    if (req.session.authenticated && req.session.userId && users[req.session.userId]) {
-        if (users[req.session.userId].blocked || users[req.session.userId].frozen) { 
-            req.session.destroy(); return res.redirect('/login?error=blocked'); 
-        }
-        next();
-    } else { res.redirect('/login'); }
+    if (req.session.authenticated && req.session.userId) next();
+    else res.redirect('/login');
 }
 
-function isAdmin(req, res, next) {
-    const r = users[req.session.userId]?.role;
-    if (r === 'admin' || r === 'superadmin') next(); else res.status(403).send('Access Denied');
-}
-
-// ==================== РЕГИСТРАЦИЯ ====================
+// ==================== СТРАНИЦА РЕГИСТРАЦИИ ====================
 app.get('/register', (req, res) => {
-    const error = req.query.error || '';
-    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Register</title>
-    <style>body{font-family:Arial;background:linear-gradient(135deg,#667eea,#764ba2);min-height:100vh;display:flex;justify-content:center;align-items:center;margin:0;}
-    .c{background:white;border-radius:16px;padding:40px;width:400px;max-width:90%;}
-    input,button{width:100%;padding:12px;margin:10px 0;border-radius:8px;border:1px solid #ddd;font-size:14px;box-sizing:border-box;}
-    button{background:#667eea;color:white;border:none;cursor:pointer;font-weight:bold;}
-    .error{background:#f8d7da;color:#721c24;padding:10px;border-radius:8px;margin-bottom:15px;}
-    .link{text-align:center;margin-top:15px;}.link a{color:#667eea;text-decoration:none;}</style></head>
-    <body><div class="c"><h1>📝 Register</h1>
-    ${error ? '<div class="error">' + error + '</div>' : ''}
-    <form action="/register" method="POST">
-        <input type="text" name="username" placeholder="Login (min 3 chars)" required minlength="3">
-        <input type="password" name="password" placeholder="Password (min 6 chars)" required minlength="6">
-        <input type="password" name="confirm_password" placeholder="Confirm Password" required>
-        <button type="submit">Register</button>
-    </form>
-    <div class="link"><a href="/login">← Back to Login</a></div></div></body></html>`);
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Регистрация</title>
+            <style>
+                body { font-family: Arial; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; justify-content: center; align-items: center; margin: 0; }
+                .container { background: white; border-radius: 16px; padding: 40px; width: 450px; max-width: 90%; }
+                h1 { text-align: center; color: #333; margin-bottom: 20px; }
+                input, button { width: 100%; padding: 12px; margin: 10px 0; border-radius: 8px; border: 1px solid #ddd; font-size: 14px; box-sizing: border-box; }
+                button { background: #667eea; color: white; border: none; cursor: pointer; font-weight: bold; }
+                button:hover { background: #5a67d8; }
+                .link { text-align: center; margin-top: 15px; }
+                .link a { color: #667eea; text-decoration: none; }
+                .error { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; padding: 10px; border-radius: 8px; margin-bottom: 15px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>📝 Регистрация</h1>
+                ${req.query.error ? '<div class="error">❌ ' + req.query.error + '</div>' : ''}
+                <form action="/register" method="POST" onsubmit="event.preventDefault(); this.submit();">
+                    <input type="text" name="username" placeholder="Логин" required>
+                    <input type="password" name="password" placeholder="Пароль" required>
+                    <input type="password" name="confirm_password" placeholder="Подтвердите пароль" required>
+                    <button type="submit">Зарегистрироваться</button>
+                </form>
+                <div class="link">
+                    <a href="/login">← Вернуться ко входу</a>
+                </div>
+            </div>
+        </body>
+        </html>
+    `);
 });
 
 app.post('/register', (req, res) => {
     const { username, password, confirm_password } = req.body;
-    if (password !== confirm_password) return res.redirect('/register?error=Passwords do not match');
-    if (username.length < 3 || password.length < 6) return res.redirect('/register?error=Login min 3, Password min 6');
-    if (users[username]) return res.redirect('/register?error=User already exists');
     
+    if (password !== confirm_password) {
+        return res.redirect('/register?error=Пароли не совпадают');
+    }
+    
+    if (users[username]) {
+        return res.redirect('/register?error=Пользователь уже существует');
+    }
+    
+    const hashedPassword = bcrypt.hashSync(password, 10);
     users[username] = {
-        username, password: bcrypt.hashSync(password, 10),
-        createdAt: new Date().toISOString(), role: 'user',
-        blocked: false, frozen: false, linksCreated: 0, hasPremium: false
+        username: username,
+        password: hashedPassword,
+        createdAt: new Date().toISOString()
     };
+    
     saveUsers();
     res.redirect('/login?registered=true');
 });
 
-// ==================== ВХОД ====================
+// ==================== СТРАНИЦА ВХОДА ====================
 app.get('/login', (req, res) => {
-    const error = req.query.error === 'auth' ? '❌ Wrong login/password' : 
-                  req.query.error === 'blocked' ? '🚫 Account blocked' : '';
-    const registered = req.query.registered === 'true' ? '✅ Registered! Please login.' : '';
+    const error = req.query.error === 'no_file' ? '❌ Файл не выбран' : 
+                  req.query.error === 'invalid' ? '❌ Неверный формат файла' : 
+                  req.query.error === 'auth' ? '❌ Неверный логин или пароль' : '';
+    const registered = req.query.registered === 'true' ? '✅ Регистрация успешна! Войдите.' : '';
     
-    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Login</title>
-    <style>body{font-family:Arial;background:linear-gradient(135deg,#667eea,#764ba2);min-height:100vh;display:flex;justify-content:center;align-items:center;margin:0;}
-    .c{background:white;border-radius:16px;padding:40px;width:400px;max-width:90%;}
-    input,button{width:100%;padding:12px;margin:10px 0;border-radius:8px;border:1px solid #ddd;font-size:14px;box-sizing:border-box;}
-    button{background:#667eea;color:white;border:none;cursor:pointer;font-weight:bold;}
-    .error{background:#f8d7da;color:#721c24;padding:10px;border-radius:8px;margin-bottom:15px;}
-    .success{background:#d4edda;color:#155724;padding:10px;border-radius:8px;margin-bottom:15px;}
-    .link{text-align:center;margin-top:15px;}.link a{color:#667eea;text-decoration:none;}</style></head>
-    <body><div class="c"><h1>🔐 VPN Admin</h1>
-    ${error ? '<div class="error">' + error + '</div>' : ''}
-    ${registered ? '<div class="success">' + registered + '</div>' : ''}
-    <form action="/login" method="POST">
-        <input type="text" name="username" placeholder="Login" required>
-        <input type="password" name="password" placeholder="Password" required>
-        <button type="submit">Login</button>
-    </form>
-    <div class="link"><a href="/register">📝 Create Account</a></div></div></body></html>`);
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>VPN Админка - Вход</title>
+            <style>
+                body { font-family: Arial; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; justify-content: center; align-items: center; margin: 0; }
+                .container { background: white; border-radius: 16px; padding: 40px; width: 450px; max-width: 90%; }
+                h1 { text-align: center; color: #333; margin-bottom: 20px; }
+                h2 { font-size: 18px; color: #555; margin: 20px 0 10px; }
+                input, button { width: 100%; padding: 12px; margin: 10px 0; border-radius: 8px; border: 1px solid #ddd; font-size: 14px; box-sizing: border-box; }
+                button { background: #667eea; color: white; border: none; cursor: pointer; font-weight: bold; }
+                button:hover { background: #5a67d8; }
+                .divider { text-align: center; margin: 20px 0; color: #999; }
+                .warning { background: #fff3cd; border: 1px solid #ffc107; padding: 12px; border-radius: 8px; margin: 15px 0; font-size: 13px; color: #856404; }
+                .error { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
+                .success { background: #d4edda; border: 1px solid #c3e6cb; color: #155724; }
+                .link { text-align: center; margin-top: 15px; }
+                .link a { color: #667eea; text-decoration: none; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🔐 VPN Админка</h1>
+                ${error ? `<div class="warning error">${error}</div>` : ''}
+                ${registered ? `<div class="warning success">${registered}</div>` : ''}
+                
+                <h2>🔑 Вход</h2>
+                <form action="/login" method="POST" onsubmit="event.preventDefault(); this.submit();">
+                    <input type="text" name="username" placeholder="Логин" required>
+                    <input type="password" name="password" placeholder="Пароль" required>
+                    <button type="submit">Войти</button>
+                </form>
+                
+                <div class="link">
+                    <a href="/register">📝 Регистрация</a>
+                </div>
+                
+                <div class="divider">━━━━━━ ИЛИ ━━━━━━</div>
+                
+                <h2>📂 Восстановление</h2>
+                <form action="/restore-from-file" method="POST" enctype="multipart/form-data" onsubmit="event.preventDefault(); this.submit();">
+                    <input type="file" name="backupFile" accept=".txt" required>
+                    <button type="submit">📂 Загрузить из .txt файла</button>
+                </form>
+                
+                <form action="/restore-from-gist" method="POST" onsubmit="event.preventDefault(); this.submit();">
+                    <button type="submit" style="background: #28a745;">☁️ Загрузить из Gist</button>
+                </form>
+            </div>
+        </body>
+        </html>
+    `);
 });
 
 app.post('/login', (req, res) => {
     const { username, password } = req.body;
+    
     if (users[username] && bcrypt.compareSync(password, users[username].password)) {
-        if (users[username].blocked) return res.redirect('/login?error=blocked');
-        req.session.authenticated = true; 
+        req.session.authenticated = true;
         req.session.userId = username;
         res.redirect('/');
-    } else { 
-        res.redirect('/login?error=auth'); 
+    } else {
+        res.redirect('/login?error=auth');
     }
 });
 
-app.get('/logout', (req, res) => { req.session.destroy(); res.redirect('/login'); });
-
-// ==================== СМЕНА ПАРОЛЯ ====================
-app.get('/change-password', isAuthenticated, (req, res) => {
-    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Change Password</title>
-    <style>body{font-family:Arial;background:linear-gradient(135deg,#667eea,#764ba2);min-height:100vh;display:flex;justify-content:center;align-items:center;margin:0;}
-    .c{background:white;border-radius:16px;padding:40px;width:400px;max-width:90%;}
-    input,button{width:100%;padding:12px;margin:10px 0;border-radius:8px;border:1px solid #ddd;font-size:14px;box-sizing:border-box;}
-    button{background:#667eea;color:white;border:none;cursor:pointer;font-weight:bold;}
-    .link{text-align:center;margin-top:15px;}.link a{color:#667eea;text-decoration:none;}
-    .error{background:#f8d7da;color:#721c24;padding:10px;border-radius:8px;margin-bottom:15px;}</style></head>
-    <body><div class="c"><h1>🔑 Change Password</h1><div id="msg"></div>
-    <input type="password" id="cur" placeholder="Current Password">
-    <input type="password" id="newp" placeholder="New Password">
-    <input type="password" id="conf" placeholder="Confirm New Password">
-    <button onclick="submitPass()">Save</button>
-    <div class="link"><a href="/">Back</a></div></div>
-    <script>async function submitPass(){
-        const c=document.getElementById('cur').value,n=document.getElementById('newp').value,co=document.getElementById('conf').value;
-        if(n!==co)return document.getElementById('msg').innerHTML='<div class="error">Passwords mismatch</div>';
-        const r=await fetch('/api/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current:c,newpass:n})});
-        const d=await r.json();
-        if(d.success){alert('✅ Password changed!');window.location.href='/';} 
-        else {document.getElementById('msg').innerHTML='<div class="error">'+d.error+'</div>';}
-    }</script></body></html>`);
+app.get('/logout', (req, res) => {
+    req.session.destroy();
+    res.redirect('/login');
 });
 
-app.post('/api/change-password', isAuthenticated, express.json(), (req, res) => {
-    const { current, newpass } = req.body;
-    const user = users[req.session.userId];
-    if (!bcrypt.compareSync(current, user.password)) return res.json({success: false, error: 'Wrong current password'});
-    user.password = bcrypt.hashSync(newpass, 10);
-    saveUsers();
-    res.json({success: true});
-});
-
-// ==================== ГЛАВНЫЙ ДАШБОРД ====================
-app.get('/', isAuthenticated, (req, res) => {
-    if (!isDataLoaded) return res.send('<h1 style="color:white;text-align:center;padding:50px;">⏳ Loading data... Please refresh in 5 seconds.</h1><script>setTimeout(()=>location.reload(), 5000);</script>');
-    
-    const currentUser = users[req.session.userId];
-    const isSuperAdmin = currentUser?.role === 'superadmin';
-    let linksHtml = '';
-    const allLinks = Object.entries(subscriptions);
-    const visibleLinks = isSuperAdmin ? allLinks : allLinks.filter(([_, s]) => s.owner === req.session.userId);
-    
-    for (const [id, data] of visibleLinks) {
-        const status = data.isDestroyed ? '💀 DESTROYED' : 
-                       (isSubscriptionExpired(data) ? '⏰ EXPIRED' : 
-                       (isTrafficLimitExceeded(data) ? '📊 TRAFFIC LIMIT' : '✅ ACTIVE'));
-        const statusColor = data.isDestroyed || isSubscriptionExpired(data) ? '#d32f2f' : '#238636';
+// ==================== ВОССТАНОВЛЕНИЕ ====================
+app.post('/restore-from-file', upload.single('backupFile'), (req, res) => {
+    try {
+        if (!req.file) return res.redirect('/login?error=no_file');
         
-        linksHtml += '<div style="margin:10px 0;padding:15px;border:1px solid #333;background:#1e1e1e;border-radius:8px;">' +
-            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">' +
-            '<code style="color:#0f0;font-size:16px;">🔗 /p/' + id + '</code>' +
-            '<span style="color:' + statusColor + ';font-weight:bold;">' + status + '</span></div>' +
-            '<div style="color:#8b949e;font-size:13px;margin-bottom:10px;">' +
-            '📝 ' + (data.name || 'No Name') + ' | 👤 ' + data.owner + ' | 📱 ' + Object.keys(data.devices||{}).length + '/' + (data.maxDevices || '∞') + ' | ' +
-            '⏰ ' + (data.expiryDate ? new Date(data.expiryDate).toLocaleDateString() : '∞') + ' | ' +
-            '🌐 ' + (data.trafficLimit ? ((Object.values(data.devices||{}).reduce((s,d)=>s+(d.trafficUsed||0),0)/data.trafficLimit*100).toFixed(1)+'%') : '∞') +
-            '</div>' +
-            '<div>' +
-            '<button onclick="extendSubscription(\'' + id + '\')" style="background:#238636;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;font-weight:bold;">💰 Продлить</button> ' +
-            '<button onclick="copyWithNewUUID(\'' + id + '\')" style="background:#1f6392;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">📋 Копировать с новым UUID</button> ' +
-            '<button onclick="showQR(\'' + id + '\')" style="background:#ff9800;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">📱 QR код</button> ' +
-            '<button onclick="showDevices(\'' + id + '\')" style="background:#6f42c1;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">👁 Устройства</button> ' +
-            '<button onclick="editSub(\'' + id + '\')" style="background:#1f6392;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">✏️ Изм.</button> ' +
-            '<button onclick="deleteSub(\'' + id + '\')" style="background:#d32f2f;color:white;border:none;padding:8px 15px;border-radius:6px;cursor:pointer;">🗑 Удалить</button>' +
-            '</div></div>';
+        const fileContent = req.file.buffer.toString('utf-8');
+        const base64Match = fileContent.match(/\[ДАННЫЕ В BASE64\]\n([A-Za-z0-9+/=]+)/);
+        
+        if (base64Match) {
+            const jsonString = Buffer.from(base64Match[1], 'base64').toString('utf-8');
+            const exportData = JSON.parse(jsonString);
+            subscriptions = exportData.subscriptions;
+            saveToGist();
+            console.log(`✅ Восстановлено ${Object.keys(subscriptions).length} ссылок из файла`);
+        } else {
+            return res.redirect('/login?error=invalid');
+        }
+    } catch (e) {
+        console.error('❌ Ошибка:', e.message);
+        return res.redirect('/login?error=invalid');
     }
-    
-    const adminBtn = isSuperAdmin ? '<a href="/admin/users" style="float:right;margin-right:10px;color:#fff;text-decoration:none;"><button style="background:#8b4513;color:white;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;">👥 Users</button></a>' : '';
-
-    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>VPN Admin</title>
-    <style>body{font-family:Arial;padding:20px;background:#0d1117;color:#fff;}
-    .card{background:#161b22;padding:20px;border-radius:12px;margin-bottom:20px;}
-    button{padding:8px 12px;margin:5px;border-radius:6px;border:none;cursor:pointer;}
-    input,textarea,select{padding:10px;width:100%;background:#0d1117;color:#fff;border:1px solid #333;border-radius:6px;margin:5px 0;box-sizing:border-box;}
-    .modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:1000;}
-    .modal-content{background:#161b22;margin:5% auto;padding:20px;width:90%;max-width:500px;border-radius:12px;max-height:80vh;overflow-y:auto;}
-    .close{color:#fff;float:right;font-size:24px;cursor:pointer;}
-    .toast{position:fixed;bottom:20px;right:20px;background:#238636;color:white;padding:12px 24px;border-radius:8px;z-index:2000;animation:fadeOut 3s forwards;}
-    @keyframes fadeOut{0%{opacity:1;}70%{opacity:1;}100%{opacity:0;visibility:hidden;}}</style></head>
-    <body>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-            <h2 style="margin:0;">👤 ${req.session.userId}</h2>
-            <div>${adminBtn}
-            <a href="/change-password"><button style="background:#8b4513;color:white;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;margin-right:5px;">🔑 Pass</button></a>
-            <a href="/export-all"><button style="background:#1f6392;color:white;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;margin-right:5px;">💾 Export</button></a>
-            <a href="/logout"><button style="background:#d32f2f;color:white;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;">🚪 Logout</button></a></div>
-        </div>
-        
-        <div class="card">
-            <h1>✨ Создать подписку</h1>
-            <form action="/generate" method="POST">
-                <input type="text" name="name" placeholder="Название подписки" required>
-                <textarea name="content" placeholder="Вставьте конфиг VLESS/Trojan..." rows="3" required></textarea>
-                <div style="display:flex;gap:10px;">
-                    <input type="number" name="duration" value="30" min="1" style="width:30%;">
-                    <select name="unit" style="width:30%;"><option value="days" selected>Дней</option><option value="hours">Часов</option><option value="months">Месяцев</option></select>
-                </div>
-                <div style="display:flex;gap:10px;">
-                    <input type="number" name="maxDevices" value="0" min="0" placeholder="Max Devices (0=∞)" style="width:48%;">
-                    <input type="number" name="trafficLimit" value="0" min="0" placeholder="Traffic MB (0=∞)" style="width:48%;">
-                </div>
-                <button type="submit" style="background:#238636;color:white;padding:12px;width:100%;font-weight:bold;margin-top:10px;">✨ Создать</button>
-            </form>
-        </div>
-        
-        <div class="card">
-            <h2>📋 Мои подписки</h2>
-            ${linksHtml || '<p style="color:#8b949e;">Нет подписок.</p>'}
-        </div>
-        
-        <div id="mainModal" class="modal"><div class="modal-content"><span class="close" onclick="document.getElementById('mainModal').style.display='none'">&times;</span><div id="modalBody"></div></div></div>
-        
-        <script>
-            function showToast(msg) {
-                const toast = document.createElement('div');
-                toast.className = 'toast';
-                toast.innerText = msg;
-                document.body.appendChild(toast);
-                setTimeout(() => toast.remove(), 3000);
-            }
-            
-            function copyWithNewUUID(id) {
-                const newUUID = crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-                    const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
-                    return v.toString(16);
-                });
-                const url = window.location.origin + '/p/' + id + '?deviceId=' + newUUID;
-                navigator.clipboard.writeText(url);
-                showToast('✅ Скопировано! UUID: ' + newUUID.substring(0, 8) + '...');
-            }
-            
-            function deleteSub(id) {
-                if(confirm('Delete ' + id + '?')) {
-                    fetch('/delete/' + id, {method:'POST'}).then(() => location.reload());
-                }
-            }
-            
-            function showQR(id) {
-                window.open('/generate-qrcode/' + id, '_blank', 'width=450,height=550');
-            }
-            
-            function editSub(id) {
-                const newConf = prompt('Enter new config:');
-                if(newConf) {
-                    fetch('/edit/' + id, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: newConf})})
-                    .then(() => location.reload());
-                }
-            }
-            
-            function showDevices(id) {
-                fetch('/devices/' + id).then(r => r.json()).then(devs => {
-                    let html = '<h3>📱 Devices for ' + id + '</h3>';
-                    if(Object.keys(devs).length === 0) {
-                        html += '<p>Нет подключенных устройств</p>';
-                    }
-                    for(const [uuid, d] of Object.entries(devs)) {
-                        const color = d.active ? '#238636' : '#d32f2f';
-                        const status = d.active ? 'Active' : 'Inactive';
-                        const btn = d.active 
-                            ? '<button onclick="killDev(\\''+id+'\\',\\''+uuid+'\\')" style="background:#d32f2f;color:white;border:none;padding:2px 5px;border-radius:3px;">Kill</button>'
-                            : '<button onclick="restoreDev(\\''+id+'\\',\\''+uuid+'\\')" style="background:#238636;color:white;border:none;padding:2px 5px;border-radius:3px;">Restore</button>';
-                        html += '<div style="background:#0d1117;padding:10px;margin:5px 0;border-radius:6px;border-left:3px solid '+color+';">';
-                        html += '<b>' + (d.name||'Unknown') + '</b><br>IP: ' + d.ip + '<br>Status: ' + status + '<br>UUID: ' + uuid.substring(0, 8) + '...<br>' + btn;
-                        html += '</div>';
-                    }
-                    document.getElementById('modalBody').innerHTML = html;
-                    document.getElementById('mainModal').style.display = 'block';
-                });
-            }
-            
-            function killDev(id, uuid) { fetch('/deactivate-device/' + id + '/' + uuid, {method:'POST'}).then(() => showDevices(id)); }
-            function restoreDev(id, uuid) { fetch('/restore-device/' + id + '/' + uuid, {method:'POST'}).then(() => showDevices(id)); }
-            
-            function extendSubscription(id) {
-                const html = '<h3>💰 Продлить ' + id + '</h3>' +
-                    '<p>Duration:</p><select id="extUnit"><option value="days" selected>Days</option><option value="hours">Hours</option><option value="months">Months</option></select>' +
-                    '<input type="number" id="extValue" value="30" min="1">' +
-                    '<p>Max Devices (0=∞):</p><input type="number" id="extDevices" value="0" min="0">' +
-                    '<p>Traffic MB (0=∞):</p><input type="number" id="extTraffic" value="0" min="0">' +
-                    '<button onclick="submitExtension(\\''+id+'\\')" style="background:#238636;color:white;width:100%;padding:12px;border:none;border-radius:6px;cursor:pointer;font-weight:bold;margin-top:15px;">✅ Продлить</button>';
-                document.getElementById('modalBody').innerHTML = html;
-                document.getElementById('mainModal').style.display = 'block';
-            }
-            
-            function submitExtension(id) {
-                const btn = event.target;
-                btn.innerHTML = '⏳ Processing...';
-                btn.disabled = true;
-                fetch('/api/extend/' + id, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        duration: parseInt(document.getElementById('extValue').value),
-                        unit: document.getElementById('extUnit').value,
-                        maxDevices: parseInt(document.getElementById('extDevices').value),
-                        trafficLimit: parseInt(document.getElementById('extTraffic').value)
-                    })
-                }).then(r => r.json()).then(res => {
-                    if(res.success) { alert('✅ Extended!'); location.reload(); }
-                    else { alert('❌ Error'); btn.disabled = false; btn.innerHTML = '✅ Extend'; }
-                }).catch(e => { alert('❌ Network Error'); btn.disabled = false; btn.innerHTML = '✅ Extend'; });
-            }
-        </script>
-    </body></html>`);
+    res.redirect('/login');
 });
 
-// ==================== API И МАРШРУТЫ ====================
-app.post('/generate', isAuthenticated, (req, res) => {
-    if (!isDataLoaded) return res.status(503).send('Loading...');
-    const id = generateRandomId();
-    const duration = parseInt(req.body.duration) || 30;
-    const unit = req.body.unit || 'days';
-    const trafficLimit = parseInt(req.body.trafficLimit) || 0;
-    const maxDevices = parseInt(req.body.maxDevices) || 0;
-    
-    subscriptions[id] = {
-        masterConfig: addPrefix(req.body.content), content: addPrefix(req.body.content),
-        originalContent: null, count: 0, devices: {},
-        owner: req.session.userId, name: req.body.name || `Sub #${id}`,
-        trafficLimit: trafficLimit > 0 ? trafficLimit * 1024 * 1024 : 0,
-        maxDevices: maxDevices,
-        expiryDate: calculateExpiryDate(duration, unit).toISOString(),
-        isDestroyed: false, createdAt: new Date().toISOString()
+app.post('/restore-from-gist', async (req, res) => {
+    await loadFromGist();
+    res.redirect('/login');
+});
+
+// ==================== ЭКСПОРТ ====================
+app.get('/export-all', isAuthenticated, (req, res) => {
+    const exportData = {
+        version: '1.0',
+        exportDate: new Date().toISOString(),
+        totalLinks: Object.keys(subscriptions).length,
+        subscriptions: subscriptions
     };
-    if (users[req.session.userId]) { users[req.session.userId].linksCreated++; saveUsers(); }
-    saveToGist();
-    res.redirect('/');
+    
+    const jsonString = JSON.stringify(exportData, null, 2);
+    const base64Data = Buffer.from(jsonString).toString('base64');
+    
+    const fileContent = `VPN SUBSCRIPTIONS BACKUP
+========================
+Экспорт: ${new Date().toLocaleString()}
+Ссылок: ${Object.keys(subscriptions).length}
+========================
+
+[ДАННЫЕ В BASE64]
+${base64Data}
+
+========================
+ВОССТАНОВЛЕНИЕ: на странице входа → "Загрузить из .txt файла"
+========================
+`;
+    
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', `attachment; filename=vpn-backup-${Date.now()}.txt`);
+    res.send(fileContent);
 });
 
-app.post('/delete/:id', isAuthenticated, (req, res) => {
-    if (subscriptions[req.params.id]) { delete subscriptions[req.params.id]; saveToGist(); }
+// ==================== ГЕНЕРАЦИЯ QR-КОДА С НОВЫМ UUID ====================
+app.get('/generate-qrcode/:id', isAuthenticated, async (req, res) => {
+    const id = req.params.id;
+    if (subscriptions[id]) {
+        const newDeviceId = uuidv4();
+        const url = `${req.protocol}://${req.get('host')}/p/${id}?deviceId=${newDeviceId}`;
+        
+        try {
+            const qrCode = await QRCode.toDataURL(url);
+            res.send(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="UTF-8">
+                    <title>QR Code - ${id}</title>
+                    <style>
+                        body { font-family: Arial; background: #0d1117; color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+                        .container { background: #161b22; padding: 30px; border-radius: 12px; text-align: center; }
+                        img { background: white; padding: 10px; border-radius: 8px; }
+                        button { margin-top: 20px; padding: 10px 20px; background: #238636; color: white; border: none; border-radius: 6px; cursor: pointer; }
+                        button:hover { background: #2ea043; }
+                        .info { margin: 10px 0; color: #58a6ff; font-size: 12px; }
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <h2>🔗 QR-код с новым устройством</h2>
+                        <img src="${qrCode}" alt="QR Code">
+                        <div class="info">UUID: ${newDeviceId}</div>
+                        <button onclick="window.close()">Закрыть</button>
+                    </div>
+                </body>
+                </html>
+            `);
+        } catch (error) {
+            res.status(500).send('Ошибка генерации QR-кода');
+        }
+    } else {
+        res.status(404).send('Ссылка не найдена');
+    }
+});
+
+// ==================== ДАШБОРД ====================
+app.get('/', isAuthenticated, (req, res) => {
+    let linksHtml = '';
+    const linksCount = Object.keys(subscriptions).length;
+    
+    for (const [id, data] of Object.entries(subscriptions)) {
+        const shortContent = removePrefix(data.masterConfig || data.content || '').substring(0, 50);
+        const displayContent = shortContent + (removePrefix(data.masterConfig || data.content || '').length > 50 ? '...' : '');
+        const devicesCount = data.devices ? Object.keys(data.devices).length : 0;
+        
+        linksHtml += `
+            <div style="margin: 10px 0; padding: 15px; border: 1px solid #333; background: #1e1e1e; border-radius: 8px;">
+                <div style="margin-bottom: 8px;">
+                    <code style="color: #0f0; font-size: 16px;">🔗 /p/${id}</code>
+                    <button onclick="copyWithNewDevice('${id}')" style="background: #1f6392; padding: 5px 10px;">📋 Копировать (новое устр-во)</button>
+                    <button onclick="window.open('/generate-qrcode/${id}', '_blank', 'width=400,height=500')" style="background: #ff9800; padding: 5px 10px;">📱 QR-код (новое устр-во)</button>
+                </div>
+                <div style="margin-bottom: 8px; color: #58a6ff;">📝 ${escapeHtml(displayContent)}</div>
+                <div style="margin-bottom: 12px;">👥 ${data.count || 0} переходов | 📱 ${devicesCount} устройств</div>
+                <div>
+                    <button onclick="editLink('${id}')" style="background: #1f6392;">✏️ Изменить</button>
+                    <button onclick="showDevices('${id}')" style="background: #6f42c1;">📱 Устройства</button>
+                    <form action="/destroy/${id}" method="POST" style="display: inline;" onsubmit="event.preventDefault(); if(confirm('Уничтожить подписку?')) this.submit();">
+                        <button type="submit" style="background: #8b0000;">💀 Уничтожить</button>
+                    </form>
+                    ${data.originalContent ? `
+                    <form action="/restore/${id}" method="POST" style="display: inline;" onsubmit="event.preventDefault(); this.submit();">
+                        <button type="submit" style="background: #238636;">🔄 Восстановить</button>
+                    </form>
+                    ` : ''}
+                    <form action="/delete/${id}" method="POST" style="display: inline;" onsubmit="event.preventDefault(); if(confirm('Удалить навсегда?')) this.submit();">
+                        <button type="submit" style="background: #d32f2f;">🗑 Удалить</button>
+                    </form>
+                </div>
+            </div>
+        `;
+    }
+    
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>VPN Админка</title>
+            <style>
+                body { font-family: Arial; padding: 20px; background: #0d1117; color: #fff; }
+                .card { background: #161b22; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
+                button { padding: 8px 12px; margin: 5px; border-radius: 6px; border: none; cursor: pointer; }
+                input, textarea { padding: 10px; width: 100%; background: #0d1117; color: #fff; border: 1px solid #333; border-radius: 6px; margin: 5px 0; }
+                .generate { background: #238636; color: white; }
+                .export { background: #1f6392; color: white; }
+                .logout { background: #d32f2f; float: right; }
+                .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; }
+                .modal-content { background: #161b22; margin: 50px auto; padding: 20px; width: 80%; max-width: 600px; border-radius: 12px; max-height: 80vh; overflow-y: auto; }
+                .close { color: #fff; float: right; font-size: 28px; cursor: pointer; }
+                .device-item { padding: 10px; margin: 5px 0; background: #0d1117; border-radius: 6px; }
+                .device-active { border-left: 4px solid #238636; }
+                .device-inactive { border-left: 4px solid #d32f2f; opacity: 0.7; }
+            </style>
+            <script>
+                function copyWithNewDevice(id) {
+                    const newDeviceId = crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                        const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+                        return v.toString(16);
+                    });
+                    const url = window.location.origin + '/p/' + id + '?deviceId=' + newDeviceId;
+                    navigator.clipboard.writeText(url);
+                    alert('✅ Ссылка скопирована с новым устройством!\\nUUID: ' + newDeviceId);
+                }
+                
+                function editLink(id) {
+                    const newContent = prompt('Введите новый конфиг:', '');
+                    if (newContent) {
+                        fetch('/edit/' + id, {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({content: newContent})
+                        }).then(() => location.reload());
+                    }
+                }
+                
+                function showDevices(id) {
+                    fetch('/devices/' + id)
+                        .then(r => r.json())
+                        .then(devices => {
+                            let html = '<h2>📱 Устройства</h2>';
+                            if (Object.keys(devices).length === 0) {
+                                html += '<p>Нет подключенных устройств</p>';
+                            } else {
+                                for (const [uuid, device] of Object.entries(devices)) {
+                                    html += \`
+                                        <div class="device-item \${device.active ? 'device-active' : 'device-inactive'}">
+                                            <strong>\${device.name}</strong><br>
+                                            IP: \${device.ip}<br>
+                                            UUID: \${uuid}<br>
+                                            Первый вход: \${new Date(device.firstSeen).toLocaleString()}<br>
+                                            Последняя активность: \${new Date(device.lastSeen).toLocaleString()}<br>
+                                            Статус: \${device.active ? '✅ Активно' : '❌ Неактивно'}<br>
+                                            \${device.active ? \`
+                                                <button onclick="deactivateDevice('\${id}', '\${uuid}')" style="background: #d32f2f; margin-top: 5px;">
+                                                    ➖ Деактивировать
+                                                </button>
+                                            \` : \`
+                                                <button onclick="restoreDevice('\${id}', '\${uuid}')" style="background: #238636; margin-top: 5px;">
+                                                    🔄 Восстановить
+                                                </button>
+                                            \`}
+                                        </div>
+                                    \`;
+                                }
+                            }
+                            html += '<br><button onclick="closeModal()">Закрыть</button>';
+                            document.getElementById('modalContent').innerHTML = html;
+                            document.getElementById('modal').style.display = 'block';
+                        });
+                }
+                
+                function deactivateDevice(linkId, deviceId) {
+                    if (confirm('Деактивировать устройство? Конфиг будет изменен на нерабочий.')) {
+                        fetch('/deactivate-device/' + linkId + '/' + deviceId, {
+                            method: 'POST'
+                        }).then(() => {
+                            showDevices(linkId);
+                        });
+                    }
+                }
+                
+                function restoreDevice(linkId, deviceId) {
+                    if (confirm('Восстановить устройство?')) {
+                        fetch('/restore-device/' + linkId + '/' + deviceId, {
+                            method: 'POST'
+                        }).then(() => {
+                            showDevices(linkId);
+                        });
+                    }
+                }
+                
+                function closeModal() {
+                    document.getElementById('modal').style.display = 'none';
+                }
+            </script>
+        </head>
+        <body>
+            <div style="overflow: hidden; margin-bottom: 20px;">
+                <span style="font-size: 18px;">👤 ${req.session.userId}</span>
+                <a href="/logout"><button class="logout">🚪 Выйти</button></a>
+                <a href="/export-all"><button class="export">💾 Скачать все ссылки</button></a>
+            </div>
+            <div class="card">
+                <h1>🔐 Создать ссылку</h1>
+                <form action="/generate" method="POST" onsubmit="event.preventDefault(); this.submit();">
+                    <textarea name="content" placeholder="Введите конфиг VPN" rows="4" required></textarea>
+                    <button type="submit" class="generate">✨ Сгенерировать</button>
+                </form>
+            </div>
+            <div class="card">
+                <h2>📋 Мои ссылки (${linksCount})</h2>
+                ${linksHtml || '<p>Нет ссылок. Создайте первую!</p>'}
+            </div>
+            
+            <div id="modal" class="modal">
+                <div class="modal-content">
+                    <span class="close" onclick="closeModal()">&times;</span>
+                    <div id="modalContent"></div>
+                </div>
+            </div>
+        </body>
+        </html>
+    `);
+});
+
+// ==================== ОБРАБОТЧИКИ ====================
+app.post('/generate', isAuthenticated, (req, res) => {
+    const id = generateRandomId();
+    subscriptions[id] = {
+        masterConfig: addPrefix(req.body.content),
+        content: addPrefix(req.body.content),
+        originalContent: null,
+        count: 0,
+        devices: {},
+        owner: req.session.userId
+    };
+    saveToGist();
     res.redirect('/');
 });
 
@@ -523,57 +633,27 @@ app.post('/edit/:id', isAuthenticated, express.json(), (req, res) => {
         subscriptions[id].content = addPrefix(req.body.content);
         saveToGist();
         res.json({success: true});
-    } else res.status(404).json({error: 'Not found'});
+    } else {
+        res.status(404).json({error: 'Not found'});
+    }
 });
 
 app.get('/devices/:id', isAuthenticated, (req, res) => {
-    if (subscriptions[req.params.id]) res.json(subscriptions[req.params.id].devices || {});
-    else res.status(404).json({error: 'Not found'});
+    const id = req.params.id;
+    if (subscriptions[id]) {
+        res.json(subscriptions[id].devices || {});
+    } else {
+        res.status(404).json({error: 'Not found'});
+    }
 });
 
 app.post('/deactivate-device/:linkId/:deviceId', isAuthenticated, (req, res) => {
     const { linkId, deviceId } = req.params;
-    if (subscriptions[linkId]?.devices?.[deviceId]) {
-        subscriptions[linkId].devices[deviceId].active = false;
-        subscriptions[linkId].devices[deviceId].config = DESTROY_CONFIG;
-        saveToGist();
-        res.json({success: true});
-    } else res.status(404).json({error: 'Not found'});
-});
-
-app.post('/restore-device/:linkId/:deviceId', isAuthenticated, (req, res) => {
-    const { linkId, deviceId } = req.params;
-    if (subscriptions[linkId]?.devices?.[deviceId]) {
-        subscriptions[linkId].devices[deviceId].active = true;
-        subscriptions[linkId].devices[deviceId].config = subscriptions[linkId].masterConfig;
-        saveToGist();
-        res.json({success: true});
-    } else res.status(404).json({error: 'Not found'});
-});
-
-app.post('/api/extend/:id', isAuthenticated, express.json(), (req, res) => {
-    if (!isDataLoaded) return res.status(503).json({error: 'Loading'});
-    const { id } = req.params;
-    const { duration, unit, maxDevices, trafficLimit } = req.body;
-    const sub = subscriptions[id];
-    
-    if (sub && (sub.owner === req.session.userId || users[req.session.userId]?.role !== 'user')) {
-        sub.expiryDate = calculateExpiryDate(duration, unit).toISOString();
-        if (maxDevices !== undefined) sub.maxDevices = parseInt(maxDevices);
-        if (trafficLimit !== undefined) sub.trafficLimit = parseInt(trafficLimit) > 0 ? parseInt(trafficLimit) * 1024 * 1024 : 0;
-        
-        if (sub.isDestroyed && sub.originalContent) {
-            sub.masterConfig = sub.originalContent;
-            sub.content = sub.originalContent;
-            sub.isDestroyed = false;
-            sub.originalContent = null;
-            if (sub.devices) {
-                for (const devId in sub.devices) {
-                    sub.devices[devId].active = true;
-                    sub.devices[devId].config = sub.masterConfig;
-                }
-            }
-        }
+    if (subscriptions[linkId] && subscriptions[linkId].devices && subscriptions[linkId].devices[deviceId]) {
+        const device = subscriptions[linkId].devices[deviceId];
+        device.active = false;
+        device.name = device.name.replace(': Неактивно', '').trim() + ': Неактивно';
+        device.config = replaceAddressInConfig(device.config, '0.0.0.0:443');
         saveToGist();
         res.json({success: true});
     } else {
@@ -581,174 +661,137 @@ app.post('/api/extend/:id', isAuthenticated, express.json(), (req, res) => {
     }
 });
 
-// ==================== ГЕНЕРАЦИЯ QR-КОДА (БЕЗ СОЗДАНИЯ УСТРОЙСТВА) ====================
-app.get('/generate-qrcode/:id', isAuthenticated, async (req, res) => {
-    if (!subscriptions[req.params.id]) return res.status(404).send('Not found');
-    
-    const id = req.params.id;
-    const newDeviceId = uuidv4();
-    const url = `${req.protocol}://${req.get('host')}/p/${id}?deviceId=${newDeviceId}`;
-    
-    try {
-        const qrCode = await QRCode.toDataURL(url);
-        res.send(`
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <title>QR Code для ${id}</title>
-                <style>
-                    body{font-family:Arial;text-align:center;padding:20px;background:#0d1117;color:#fff;}
-                    .qr-container{background:white;display:inline-block;padding:20px;border-radius:16px;margin:20px;}
-                    button{padding:10px 20px;background:#238636;color:white;border:none;border-radius:6px;cursor:pointer;font-size:16px;margin:5px;}
-                    .uuid{font-size:12px;color:#8b949e;margin-top:10px;word-break:break-all;}
-                </style>
-            </head>
-            <body>
-                <h2>📱 QR-код для подключения</h2>
-                <div class="qr-container">
-                    <img src="${qrCode}" style="width:250px;height:250px;">
-                </div>
-                <div>
-                    <button onclick="copyLink()">📋 Скопировать ссылку</button>
-                    <button onclick="window.close()">❌ Закрыть</button>
-                </div>
-                <div class="uuid">
-                    <strong>UUID для нового устройства:</strong><br>
-                    ${newDeviceId}<br>
-                    <small>Устройство будет создано ТОЛЬКО после перехода по ссылке</small>
-                </div>
-                <div style="margin-top:20px;">
-                    <a href="/" style="color:#1f6392;">← Назад в админку</a>
-                </div>
-                <script>
-                    function copyLink() {
-                        navigator.clipboard.writeText('${url}');
-                        alert('✅ Ссылка скопирована! Устройство создастся при первом переходе');
-                    }
-                </script>
-            </body>
-            </html>
-        `);
-    } catch (e) { 
-        res.status(500).send('Error generating QR code'); 
-    }
-});
-
-// ==================== АДМИН ПАНЕЛЬ ====================
-app.get('/admin/users', isAuthenticated, isAdmin, (req, res) => {
-    let usersHtml = '';
-    for (const [username, user] of Object.entries(users)) {
-        const linksCount = Object.values(subscriptions).filter(s => s.owner === username).length;
-        usersHtml += '<div style="margin:10px 0;padding:15px;border:1px solid #333;background:#1e1e1e;border-radius:8px;">' +
-            '<strong>👤 ' + username + '</strong> (' + user.role + ')<br>Links: ' + linksCount + ' | Blocked: ' + user.blocked +
-            '<div style="margin-top:5px;">' +
-            (user.blocked 
-                ? '<button onclick="unblock(\'' + username + '\')" style="background:#238636;color:white;border:none;padding:5px;">Unblock</button>'
-                : '<button onclick="block(\'' + username + '\')" style="background:#d32f2f;color:white;border:none;padding:5px;">Block</button>') +
-            ' <button onclick="delUser(\'' + username + '\')" style="background:#d32f2f;color:white;border:none;padding:5px;">Delete</button>' +
-            '</div></div>';
-    }
-    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>User Management</title>
-    <style>body{background:#0d1117;color:white;padding:20px;font-family:Arial;}
-    button{padding:5px 10px;margin:2px;border-radius:4px;border:none;cursor:pointer;}
-    a button{background:#6e7681;color:white;padding:10px;}</style>
-    <body>
-    <h1>👥 User Management</h1>
-    <a href="/"><button>Back</button></a>
-    ${usersHtml}
-    <script>
-        function block(u){fetch('/api/block-user',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u})}).then(()=>location.reload());}
-        function unblock(u){fetch('/api/unblock-user',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u})}).then(()=>location.reload());}
-        function delUser(u){if(confirm('Delete '+u+'?')){fetch('/api/delete-user',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u})}).then(()=>location.reload());}}
-    </script>
-    </body></html>`);
-});
-
-app.post('/api/block-user', isAuthenticated, isAdmin, express.json(), (req, res) => { if(users[req.body.username]) { users[req.body.username].blocked=true; saveUsers(); } res.json({success:true}); });
-app.post('/api/unblock-user', isAuthenticated, isAdmin, express.json(), (req, res) => { if(users[req.body.username]) { users[req.body.username].blocked=false; saveUsers(); } res.json({success:true}); });
-app.post('/api/delete-user', isAuthenticated, isAdmin, express.json(), (req, res) => {
-    const { username } = req.body;
-    if (username && username !== req.session.userId && users[username]) {
-        for (const [id, sub] of Object.entries(subscriptions)) { if (sub.owner === username) delete subscriptions[id]; }
-        delete users[username]; saveUsers(); saveToGist();
-    } res.json({success:true}); 
-});
-
-app.get('/export-all', isAuthenticated, (req, res) => {
-    const data = JSON.stringify({ version: '1.9', subscriptions }, null, 2);
-    const b64 = Buffer.from(data).toString('base64');
-    res.setHeader('Content-Disposition', 'attachment; filename=backup.txt');
-    res.send('VPN BACKUP\n[ДАННЫЕ В BASE64]\n' + b64);
-});
-
-// ==================== ПОТРЕБИТЕЛЬСКАЯ ССЫЛКА (/p/:id) - ЗДЕСЬ СОЗДАЕТСЯ УСТРОЙСТВО ====================
-app.get('/p/:id', async (req, res) => {
-    if (!isDataLoaded) return res.status(503).send('# Server initializing...');
-    const id = req.params.id;
-    if (!subscriptions[id]) return res.status(404).send('Not found');
-    
-    const sub = subscriptions[id];
-    let deviceId = req.query.deviceId;
-    
-    // Если нет deviceId - создаем новый и редиректим
-    if (!deviceId) {
-        deviceId = uuidv4();
-        return res.redirect(`/p/${id}?deviceId=${deviceId}`);
-    }
-    
-    sub.count = (sub.count || 0) + 1;
-    const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.connection?.remoteAddress || '0.0.0.0';
-    const country = await getCountryFromIP(ip);
-    
-    if (!sub.devices) sub.devices = {};
-    
-    // ТОЛЬКО ЗДЕСЬ создается новое устройство! (при первом переходе по ссылке)
-    if (!sub.devices[deviceId]) {
-        if (isDeviceLimitExceeded(sub)) {
-            res.setHeader('Content-Type', 'text/plain');
-            return res.send(DESTROY_CONFIG); 
-        }
-        sub.devices[deviceId] = {
-            name: country,
-            country: country,
-            ip: ip,
-            userAgent: req.headers['user-agent'],
-            firstSeen: new Date().toISOString(),
-            lastSeen: new Date().toISOString(),
-            active: true,
-            config: sub.masterConfig || sub.content,
-            trafficUsed: 0
-        };
-        console.log(`✅ Новое устройство ${deviceId} создано для подписки ${id}`);
+app.post('/restore-device/:linkId/:deviceId', isAuthenticated, (req, res) => {
+    const { linkId, deviceId } = req.params;
+    if (subscriptions[linkId] && subscriptions[linkId].devices && subscriptions[linkId].devices[deviceId]) {
+        const device = subscriptions[linkId].devices[deviceId];
+        device.active = true;
+        device.name = device.name.replace(': Неактивно', '').trim();
+        // Восстанавливаем оригинальный конфиг из masterConfig
+        device.config = subscriptions[linkId].masterConfig;
+        saveToGist();
+        res.json({success: true});
     } else {
-        const device = sub.devices[deviceId];
-        device.lastSeen = new Date().toISOString();
-        device.ip = ip;
-        if (device.country !== country) device.country = country;
-        device.trafficUsed = (device.trafficUsed || 0) + Buffer.byteLength(device.config, 'utf8');
+        res.status(404).json({error: 'Not found'});
     }
-    
-    if (!sub.isDestroyed && (isSubscriptionExpired(sub) || isTrafficLimitExceeded(sub))) {
-        if (!sub.originalContent) sub.originalContent = sub.masterConfig;
-        applyDestroyConfig(sub);
-    }
-    
-    saveToGist();
-    
-    const device = sub.devices[deviceId];
-    const configToSend = (device?.active && !sub.isDestroyed) ? device.config : DESTROY_CONFIG;
-    
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.send(configToSend);
 });
+
+app.get('/p/:id', async (req, res) => {
+    const id = req.params.id;
+    if (subscriptions[id]) {
+        let deviceId = req.query.deviceId;
+        
+        // Если нет deviceId, создаем новый
+        if (!deviceId) {
+            deviceId = uuidv4();
+            return res.redirect(`/p/${id}?deviceId=${deviceId}`);
+        }
+        
+        subscriptions[id].count++;
+        
+        // Получаем IP пользователя
+        const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+        const country = await getCountryFromIP(ip);
+        
+        // Инициализируем devices если нет
+        if (!subscriptions[id].devices) {
+            subscriptions[id].devices = {};
+        }
+        
+        // Создаем или обновляем устройство
+        if (!subscriptions[id].devices[deviceId]) {
+            subscriptions[id].devices[deviceId] = {
+                name: country,
+                ip: ip,
+                userAgent: req.headers['user-agent'],
+                firstSeen: new Date().toISOString(),
+                lastSeen: new Date().toISOString(),
+                active: true,
+                config: subscriptions[id].masterConfig || subscriptions[id].content
+            };
+        } else {
+            subscriptions[id].devices[deviceId].lastSeen = new Date().toISOString();
+            subscriptions[id].devices[deviceId].ip = ip;
+        }
+        
+        saveToGist();
+        
+        // Отдаем персональный конфиг устройства
+        const device = subscriptions[id].devices[deviceId];
+        const configToSend = device.active ? device.config : DESTROY_CONFIG;
+        
+        // Запрещаем кеширование
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        res.send(configToSend);
+    } else {
+        res.status(404).send('Link not found');
+    }
+});
+
+app.post('/delete/:id', isAuthenticated, (req, res) => {
+    delete subscriptions[req.params.id];
+    saveToGist();
+    res.redirect('/');
+});
+
+app.post('/destroy/:id', isAuthenticated, (req, res) => {
+    const id = req.params.id;
+    if (subscriptions[id]) {
+        if (!subscriptions[id].originalContent) {
+            subscriptions[id].originalContent = subscriptions[id].masterConfig || subscriptions[id].content;
+        }
+        subscriptions[id].masterConfig = addPrefix(DESTROY_CONFIG);
+        subscriptions[id].content = addPrefix(DESTROY_CONFIG);
+        
+        // Деактивируем все устройства
+        if (subscriptions[id].devices) {
+            for (const deviceId in subscriptions[id].devices) {
+                subscriptions[id].devices[deviceId].active = false;
+                subscriptions[id].devices[deviceId].config = DESTROY_CONFIG;
+            }
+        }
+        
+        saveToGist();
+    }
+    res.redirect('/');
+});
+
+app.post('/restore/:id', isAuthenticated, (req, res) => {
+    const id = req.params.id;
+    if (subscriptions[id] && subscriptions[id].originalContent) {
+        subscriptions[id].masterConfig = subscriptions[id].originalContent;
+        subscriptions[id].content = subscriptions[id].originalContent;
+        subscriptions[id].originalContent = null;
+        
+        // Восстанавливаем все устройства
+        if (subscriptions[id].devices) {
+            for (const deviceId in subscriptions[id].devices) {
+                subscriptions[id].devices[deviceId].active = true;
+                subscriptions[id].devices[deviceId].config = subscriptions[id].masterConfig;
+            }
+        }
+        
+        saveToGist();
+    }
+    res.redirect('/');
+});
+
+function escapeHtml(text) {
+    if (!text) return '';
+    return text.replace(/[&<>]/g, function(m) {
+        if (m === '&') return '&amp;';
+        if (m === '<') return '&lt;';
+        if (m === '>') return '&gt;';
+        return m;
+    });
+}
 
 // ==================== ЗАПУСК ====================
-loadUsers();
-
-app.listen(PORT, '0.0.0.0', async () => {
-    console.log(`🚀 Server running on port ${PORT}`);
+app.listen(PORT, async () => {
+    console.log(`🚀 Сервер запущен на порту ${PORT}`);
+    loadUsers();
     await loadFromGist();
-    checkSubscriptions();
 });
